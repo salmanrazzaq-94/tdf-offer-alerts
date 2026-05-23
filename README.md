@@ -34,10 +34,38 @@ Do not commit TDF credentials, cookies, storage state, or exported browser sessi
 ## Browserbase session setup
 
 1. Create a Browserbase API key and persistent context.
-2. Add the Browserbase and Telegram environment variables locally.
-3. Run `npm run refresh-session`.
+2. Add the Browserbase and Telegram environment variables locally in `.env`.
+3. Run `npm run refresh-session:local`.
 4. Open the printed Browserbase debugger URL and log in to TDF manually.
 5. Save the context id as `BROWSERBASE_CONTEXT_ID`.
 6. Run the GitHub Action manually with `workflow_dispatch`.
 
 If the Action reports that login needs attention, refresh the Browserbase context by logging in manually again.
+
+## Local test
+
+Create a local `.env` from the example:
+
+```sh
+cp .env.example .env
+```
+
+Fill in:
+
+```text
+BROWSERBASE_API_KEY=
+BROWSERBASE_PROJECT_ID=
+BROWSERBASE_CONTEXT_ID=
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
+
+Then run:
+
+```sh
+npm test
+npm run refresh-session:local
+npm run start:local
+```
+
+The first live `start:local` run will send alerts for every currently visible performance and write them to `data/seen-offers.json`. Commit that file after the first successful run if you do not want GitHub Actions to alert on the same existing performances again.
