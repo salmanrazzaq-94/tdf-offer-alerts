@@ -1,0 +1,8 @@
+name = "tdf-alerts-bot"
+main = "worker/index.ts"
+compatibility_date = "2026-05-23"
+workers_dev = true
+
+[[kv_namespaces]]
+binding = "TDF_ALERTS"
+id = "565f5f3899a547439f1ce155e9947971"
