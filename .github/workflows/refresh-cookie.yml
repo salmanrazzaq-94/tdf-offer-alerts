@@ -34,7 +34,9 @@ jobs:
         run: npm ci
 
       - name: Refresh TDF cookie with Browserbase
-        run: npm run login:browserbase
+        run: |
+          touch .env
+          npm run login:browserbase
         env:
           BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
           BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
