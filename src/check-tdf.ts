@@ -1,4 +1,5 @@
 import { readEnv } from "./env.js";
+import { readJsonFile, writeJsonFile } from "./json-file.js";
 import {
   findNewAlerts,
   flattenOffers,
@@ -16,11 +17,24 @@ import {
   timestampedDetailsFilename
 } from "./telegram.js";
 
+type AuthState = {
+  lastFailureNotifiedAt: string | null;
+  lastFailureReason: string | null;
+};
+
+const authStatePath = "data/auth-state.json";
+const authFailureNotifyIntervalMs = 12 * 60 * 60 * 1000;
+
 async function main(): Promise<void> {
   const env = readEnv();
 
   try {
     const offers = await fetchTdfOffersWithCookie(env.tdfCookie);
+    await writeJsonFile<AuthState>(authStatePath, {
+      lastFailureNotifiedAt: null,
+      lastFailureReason: null
+    });
+
     const alertItems = flattenOffers(offers);
     const previousState = await readSeenState(env.seenStatePath);
     const newAlerts = findNewAlerts(alertItems, previousState);
@@ -54,6 +68,26 @@ async function main(): Promise<void> {
 
 async function notifyAuthFailure(reason: string): Promise<void> {
   const env = readEnv();
+  const state = await readJsonFile<AuthState>(authStatePath, {
+    lastFailureNotifiedAt: null,
+    lastFailureReason: null
+  });
+  const lastNotifiedAt = state.lastFailureNotifiedAt
+    ? new Date(state.lastFailureNotifiedAt).valueOf()
+    : 0;
+  const shouldNotify =
+    !lastNotifiedAt || Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs;
+
+  await writeJsonFile<AuthState>(authStatePath, {
+    lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
+    lastFailureReason: reason
+  });
+
+  if (!shouldNotify) {
+    console.log("Skipping repeated auth failure Telegram notification.");
+    return;
+  }
+
   try {
     await sendTelegramMessage(
       { botToken: env.telegramBotToken, chatId: env.telegramChatId },

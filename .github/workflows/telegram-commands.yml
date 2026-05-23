@@ -1,19 +1,19 @@
-name: Check TDF Offers
+name: Telegram Commands
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: tdf-offer-alerts
+  group: tdf-telegram-commands
   cancel-in-progress: false
 
 jobs:
-  check:
+  commands:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -30,34 +30,21 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Type check
-        run: npm run check
-
-      - name: Run tests
-        run: npm test
-
-      - name: Check TDF offers
-        id: check_tdf
-        continue-on-error: true
-        run: npm run build && npm start
+      - name: Run Telegram commands
+        run: npm run build && npm run telegram-commands
         env:
           TDF_COOKIE: ${{ secrets.TDF_COOKIE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
-      - name: Commit seen-offers snapshot
-        if: always()
+      - name: Commit telegram command state
         run: |
-          if [[ -n "$(git status --porcelain data/seen-offers.json data/auth-state.json)" ]]; then
+          if [[ -n "$(git status --porcelain data/telegram-state.json)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data/seen-offers.json data/auth-state.json
-            git commit -m "Update TDF watcher state"
+            git add data/telegram-state.json
+            git commit -m "Update Telegram command state"
             git push
           else
-            echo "No state changes to commit."
+            echo "No telegram command state changes to commit."
           fi
-
-      - name: Fail if TDF check failed
-        if: steps.check_tdf.outcome == 'failure'
-        run: exit 1

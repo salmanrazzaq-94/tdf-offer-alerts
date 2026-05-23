@@ -61,8 +61,8 @@ export function formatDigestSummary(offers: TdfOffer[], newItems: AlertItem[]): 
   const productionCount = offers.length;
   const performanceCount = offers.reduce((total, offer) => total + offer.performances.length, 0);
   const summary = offers
-    .map((offer) => `${offer.title} (${offer.performances.length})`)
-    .join(" | ");
+    .map((offer) => `- ${offer.title} (${offer.performances.length})`)
+    .join("\n");
 
   return [
     `<b>TDF Offers Update</b>`,
