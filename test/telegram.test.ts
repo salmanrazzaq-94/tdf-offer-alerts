@@ -63,10 +63,11 @@ test("formats a Telegram digest summary", () => {
 test("formats an attached offer details file", () => {
   const message = formatOfferDetailsFile([offer], [item]);
 
-  assert.match(message, /TDF Offers Detail/);
+  assert.match(message, /TDF OFFERS/);
   assert.match(message, /Passport: Dog Day Afternoon - \$20 Seats/);
   assert.match(message, /August Wilson Theatre/);
-  assert.match(message, /- NEW May 26, 2026, 7:00 PM \| performanceId 242526/);
+  assert.match(message, /NEW Tue, May 26, 7:00 PM/);
+  assert.doesNotMatch(message, /performanceId/);
 });
 
 test("escapes auth failure text", () => {

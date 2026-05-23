@@ -75,27 +75,24 @@ export function formatDigestSummary(offers: TdfOffer[], newItems: AlertItem[]): 
 
 export function formatOfferDetailsFile(offers: TdfOffer[], newItems: AlertItem[]): string {
   const lines = [
-    "TDF Offers Detail",
-    `${newItems.length} new performances`,
-    `${offers.length} shows available`,
+    "TDF OFFERS",
+    `${offers.length} shows | ${offers.reduce((total, offer) => total + offer.performances.length, 0)} performances | ${newItems.length} new`,
     "",
-    "Shows",
-    ...offers.map((offer) => `- ${offer.title} (${offer.performances.length})`),
+    "SHOWS",
+    ...offers.map((offer, index) => `${index + 1}. ${offer.title} (${offer.performances.length})`),
     "",
-    "Details"
+    "DETAILS"
   ];
   for (const offer of offers) {
-    const keywords = offer.keywords.map((keyword) => keyword.keywordName).join(" | ");
     lines.push("");
+    lines.push("=".repeat(72));
     lines.push(offer.title);
     lines.push(offer.facility);
-    if (keywords) {
-      lines.push(keywords);
-    }
+    lines.push("-".repeat(72));
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
       const marker = newItems.some((item) => item.id === id) ? "NEW " : "";
-      lines.push(`- ${marker}${formatPerformanceDate(performance.performanceDate)} | performanceId ${performance.performanceId}`);
+      lines.push(`${marker}${formatPerformanceDate(performance.performanceDate)}`);
     }
   }
 
@@ -133,8 +130,11 @@ function formatPerformanceDate(value: string): string {
   }
 
   return new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
     timeZone: "America/New_York"
   }).format(date);
 }
