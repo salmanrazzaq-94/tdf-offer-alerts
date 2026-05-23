@@ -10,7 +10,7 @@ Public-repo friendly GitHub Action that checks TDF offers every 10 minutes and s
 - Seen performances are stored in `data/seen-offers.json` and committed back to the repo.
 - Telegram receives one alert per newly seen performance.
 
-The scheduled workflow does not launch Browserbase or Playwright, which keeps the normal every-10-minute run as cheap as possible. Browserbase is only an optional helper for manual login/cookie refresh.
+The scheduled workflow does not launch Playwright, which keeps the normal every-10-minute run as cheap as possible. Playwright is only a local helper for refreshing cookies when the TDF session expires.
 
 ## Public Repo Safety
 
@@ -19,9 +19,6 @@ It is okay for this repo to be public if these stay secret:
 - `TDF_COOKIE`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
-- `BROWSERBASE_API_KEY`
-- `BROWSERBASE_CONTEXT_ID`
-- `BROWSERBASE_PROJECT_ID`
 
 Never commit `.env`, exported cookies, screenshots of logged-in pages, or browser storage files.
 
@@ -39,14 +36,6 @@ TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID
 ```
 
-Optional local refresh helpers:
-
-```text
-BROWSERBASE_API_KEY
-BROWSERBASE_PROJECT_ID
-BROWSERBASE_CONTEXT_ID
-```
-
 ## Local Setup
 
 Install dependencies:
@@ -61,7 +50,7 @@ Create local env:
 cp .env.example .env
 ```
 
-Fill in Telegram and either paste a fresh `TDF_COOKIE` manually or use the Browserbase refresh flow below.
+Fill in Telegram and either paste a fresh `TDF_COOKIE` manually or use the local Playwright refresh flow below.
 
 Run tests:
 
@@ -90,6 +79,22 @@ The first successful run will alert on every currently visible performance and u
 
 The Action needs a cookie header copied from a logged-in TDF browser session.
 
+Local Playwright method:
+
+Install Playwright's local Chromium once:
+
+```sh
+npm run install-browser
+```
+
+Open a local browser profile and log into TDF:
+
+```sh
+npm run login:local
+```
+
+The script waits for a working login, exports the cookies, tests the TDF JSON endpoint, and saves `TDF_COOKIE` into `.env`.
+
 Manual browser method:
 
 1. Log in to TDF in your browser.
@@ -98,26 +103,6 @@ Manual browser method:
 4. Find the request to `Current?handler=Performances`.
 5. Copy the full `Cookie` request header.
 6. Save it as `TDF_COOKIE` in `.env` and GitHub Actions Secrets.
-
-Browserbase helper method:
-
-```sh
-npm run create-context:local
-```
-
-Save the printed id as `BROWSERBASE_CONTEXT_ID` in `.env`, then:
-
-```sh
-npm run refresh-session:local
-```
-
-Open the printed Browserbase debugger URL and log in to TDF manually. After login:
-
-```sh
-npm run export-cookie:local
-```
-
-Copy the printed cookie header into `TDF_COOKIE`.
 
 ## GitHub Action
 

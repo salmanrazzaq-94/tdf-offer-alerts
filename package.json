@@ -10,14 +10,11 @@
     "test": "tsc --noEmit false && node --test dist/test/*.test.js",
     "start": "node dist/src/check-tdf.js",
     "start:local": "tsc --noEmit false && node --env-file=.env dist/src/check-tdf.js",
-    "create-context:local": "tsc --noEmit false && node --env-file=.env dist/src/create-context.js",
-    "export-cookie:local": "tsc --noEmit false && node --env-file=.env dist/src/export-cookie.js",
-    "refresh-session": "tsc --noEmit false && node dist/src/refresh-session.js",
-    "refresh-session:local": "tsc --noEmit false && node --env-file=.env dist/src/refresh-session.js"
+    "login:local": "tsc --noEmit false && node --env-file=.env dist/src/login-local.js",
+    "install-browser": "playwright install chromium"
   },
   "dependencies": {
-    "@browserbasehq/sdk": "^2.12.0",
-    "playwright-core": "^1.60.0"
+    "playwright": "^1.60.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -37,6 +37,7 @@ build/Release/
 .env
 .env.*
 !.env.example
+.auth/
 .DS_Store
 
 # Package manager artifacts
