@@ -36,12 +36,22 @@ jobs:
       - name: Run tests
         run: npm test
 
+      - name: Fetch TDF cookie from Cloudflare
+        run: |
+          curl -fsS "https://tdf-alerts-bot.salmanrazzaq94.workers.dev/tdf-cookie?token=${COOKIE_FORM_TOKEN}" > /tmp/tdf-cookie.txt
+          {
+            echo "TDF_COOKIE<<EOF"
+            cat /tmp/tdf-cookie.txt
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+        env:
+          COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
+
       - name: Check TDF offers
         id: check_tdf
         continue-on-error: true
         run: npm run build && npm start
         env:
-          TDF_COOKIE: ${{ secrets.TDF_COOKIE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 

@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "GitHub Action that checks TDF offers and sends Telegram alerts for newly seen performances.",
+  "description": "Telegram and Cloudflare Worker bot for checking TDF offers.",
   "scripts": {
     "build": "tsc --noEmit false",
     "check": "tsc --noEmit",
@@ -15,10 +15,12 @@
     "telegram-commands": "node dist/src/telegram-commands.js",
     "telegram-commands:local": "tsc --noEmit false && node --env-file=.env dist/src/telegram-commands.js",
     "login:local": "tsc --noEmit false && node --env-file=.env dist/src/login-local.js",
+    "login:browserbase": "tsc --noEmit false && node --env-file=.env dist/src/login-browserbase.js",
     "install-browser": "playwright install chromium",
     "worker:deploy": "wrangler deploy"
   },
   "dependencies": {
+    "@browserbasehq/sdk": "^2.12.0",
     "playwright": "^1.60.0"
   },
   "devDependencies": {

@@ -134,5 +134,11 @@ function classifyStatus(status: number): TdfFetchErrorKind {
 }
 
 function looksLikeAuthFailure(body: string): boolean {
-  return /login|captcha|access denied|error 15|forbidden|unauthori[sz]ed/i.test(body);
+  if (/log\s*out|logged\s+in\s+as/i.test(body)) {
+    return false;
+  }
+
+  return /captcha|access denied|error 15|forbidden|unauthori[sz]ed|password|sign\s+in|log\s+in/i.test(
+    body
+  );
 }

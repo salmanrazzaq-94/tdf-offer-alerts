@@ -1,41 +1,53 @@
 # TDF Offer Alerts
 
-Public-repo friendly GitHub Action that checks TDF offers every 10 minutes and sends Telegram alerts for newly seen performances.
+Phone-first TDF availability watcher with Telegram alerts, a Cloudflare Worker command bot, and optional Browserbase login testing.
 
-## How It Works
+## Current Direction
 
-- The scheduled Action does a direct HTTP request to `https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances`.
-- Authentication comes from a `TDF_COOKIE` GitHub Actions secret.
-- New performances are detected by `productionSeasonId:performanceId`.
-- Seen performances are stored in `data/seen-offers.json` and committed back to the repo.
-- Telegram receives one summary message plus one timestamped details file when new performances appear.
-- Each scheduled run appends a JSON line to `data/run-log.jsonl` so recent success/failure history can be inspected later.
+The preferred V1 shape is:
 
-The scheduled workflow does not launch Playwright, which keeps the normal every-10-minute run as cheap as possible. Playwright is only a local helper for refreshing cookies when the TDF session expires.
+- Cloudflare Worker handles Telegram commands over a webhook.
+- Cloudflare KV stores the current TDF cookie for the bot.
+- GitHub Actions can still run scheduled delta checks and 9am digests, but they fetch the TDF cookie from Cloudflare at runtime.
+- `/offers` sends the latest current offers summary and a timestamped text attachment.
+- `/status` checks whether the saved cookie still works.
+- `/cookie` returns a private form link for saving a fresh cookie.
+- Local scripts are used for development, testing, and cookie refresh experiments.
+- Browserbase is used only when the saved cookie expires and needs refreshing.
+
+This project does not bypass captchas or security challenges. If TDF shows a captcha, access-denied page, MFA, or a human verification step, the automation stops and reports that the session needs attention.
+
+## How Offers Are Checked
+
+The checker requests:
+
+```text
+https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances
+```
+
+It parses the returned JSON into shows and performances. A unique performance is:
+
+```text
+productionSeasonId:performanceId
+```
+
+Removed offers are ignored. New shows or new times can be alerted in the delta checker. Current digest messages include all currently available shows.
 
 ## Public Repo Safety
 
-It is okay for this repo to be public if these stay secret:
+It is okay for the repo to be public if these stay secret:
 
 - `TDF_COOKIE`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- `COOKIE_FORM_TOKEN`
+- `BROWSERBASE_API_KEY`
+- `BROWSERBASE_PROJECT_ID`
+- `BROWSERBASE_CONTEXT_ID`
+- `TDF_EMAIL`
+- `TDF_PASSWORD`
 
 Never commit `.env`, exported cookies, screenshots of logged-in pages, or browser storage files.
-
-`data/seen-offers.json` is public-safe in the sense that it only contains seen offer IDs, but it does reveal what offers the watcher has observed.
-
-## Required GitHub Secrets
-
-Add these in GitHub: `Settings` -> `Secrets and variables` -> `Actions`.
-
-Required for scheduled runs:
-
-```text
-TDF_COOKIE
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
-```
 
 ## Local Setup
 
@@ -51,7 +63,7 @@ Create local env:
 cp .env.example .env
 ```
 
-Fill in Telegram and either paste a fresh `TDF_COOKIE` manually or use the local Playwright refresh flow below.
+Fill in the values you need for the script you are running.
 
 Run tests:
 
@@ -59,95 +71,145 @@ Run tests:
 npm test
 ```
 
-Run the checker locally:
+Run the local checker with `TDF_COOKIE` from `.env`:
 
 ```sh
 npm run start:local
 ```
 
-The first successful run will alert on every currently visible performance and update `data/seen-offers.json`.
+Send the current digest locally:
 
-## Telegram Setup
+```sh
+npm run send-current:local
+```
 
-1. Message `@BotFather` in Telegram.
-2. Create a bot with `/newbot`.
-3. Save the token as `TELEGRAM_BOT_TOKEN`.
-4. Send a message to your new bot.
-5. Visit `https://api.telegram.org/bot<token>/getUpdates`.
-6. Save the private chat id as `TELEGRAM_CHAT_ID`.
+## Cloudflare Worker Bot
 
-## TDF Cookie Setup
+The Worker is the phone-friendly surface:
 
-The Action needs a cookie header copied from a logged-in TDF browser session.
+- `/offers`: sends the latest current TDF offers and details file.
+- `/status`: tests whether the saved cookie works.
+- `/cookie`: sends a private Cloudflare form URL for pasting a fresh cookie.
+- `/help`: lists commands.
 
-Local Playwright method:
+Deploy:
 
-Install Playwright's local Chromium once:
+```sh
+npm run worker:deploy
+```
+
+The Worker stores the cookie in Cloudflare KV under:
+
+```text
+TDF_COOKIE
+```
+
+## Browserbase Login Test
+
+Browserbase may let us run a normal headless login flow and export fresh cookies automatically. This only works if TDF serves the normal login form and does not require a human challenge.
+
+Use Browserbase only as a refresh path when the saved cookie fails. Normal `/offers` and `/status` checks should reuse the saved cookie from Cloudflare KV.
+
+Required local `.env` values:
+
+```text
+BROWSERBASE_API_KEY=
+BROWSERBASE_PROJECT_ID=
+BROWSERBASE_CONTEXT_ID=
+TDF_EMAIL=
+TDF_PASSWORD=
+```
+
+`BROWSERBASE_CONTEXT_ID` is optional the first time. If it is missing, the script creates a persistent Browserbase Context and saves the ID to `.env`.
+
+Run:
+
+```sh
+npm run login:browserbase
+```
+
+What it does:
+
+- Creates a Browserbase session attached to the persistent Context.
+- Connects Playwright over CDP.
+- Opens `https://my.tdf.org/account/login`.
+- Fills the TDF email and password from local env.
+- Stops if TDF shows a captcha, access-denied page, or security challenge.
+- Opens the TDF offers page.
+- Exports cookies and verifies the performances JSON endpoint.
+- Saves the working `TDF_COOKIE` to `.env`.
+
+Browserbase Context docs: [Contexts](https://docs.browserbase.com/features/contexts)
+
+## GitHub Actions
+
+GitHub Actions are kept for scheduled checks:
+
+- `Check TDF Offers`: runs every 10 minutes and alerts only on newly seen performances.
+- `Daily Current TDF Offers`: sends a 9am America/New_York digest with all current offers.
+
+The workflows do not store the TDF cookie in GitHub Secrets. Instead, they fetch it from the Cloudflare Worker:
+
+```text
+https://tdf-alerts-bot.salmanrazzaq94.workers.dev/tdf-cookie?token=...
+```
+
+Required GitHub Actions secrets:
+
+```text
+COOKIE_FORM_TOKEN
+TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID
+```
+
+The `COOKIE_FORM_TOKEN` must match the secret configured on the Cloudflare Worker. This lets GitHub retrieve the current cookie from Cloudflare KV without duplicating `TDF_COOKIE` in GitHub.
+
+## Cookie Lifetime
+
+TDF controls cookie lifetime on its servers. The browser may show some cookies as `Session`, while others have future dates, but the authenticated session can still stop working earlier.
+
+Common reasons:
+
+- TDF invalidates the server-side session.
+- The login was created from one browser/IP/fingerprint and reused from another.
+- Imperva/security cookies rotate.
+- The account logs out or TDF forces a fresh shared-session handshake.
+- A security challenge appears and requires a human browser session.
+
+There is no reliable client-side setting that prolongs this. The practical strategy is:
+
+- Reuse the existing cookie until `/status` or `/offers` says it failed.
+- Run `npm run login:browserbase` only after the cookie expires.
+- Save the refreshed `TDF_COOKIE` to Cloudflare KV.
+- Fall back to `npm run login:local` if Browserbase hits a human challenge.
+
+## Local Manual Login Fallback
+
+If Browserbase cannot complete the login because TDF requires a human challenge, use the local browser helper:
 
 ```sh
 npm run install-browser
-```
-
-Open a local browser profile and log into TDF:
-
-```sh
 npm run login:local
 ```
 
-The script waits for a working login, exports the cookies, tests the TDF JSON endpoint, and saves `TDF_COOKIE` into `.env`.
-
-Manual browser method:
-
-1. Log in to TDF in your browser.
-2. Open DevTools -> Network.
-3. Visit `https://nycgw47.tdf.org/TDFCustomOfferings/Current`.
-4. Find the request to `Current?handler=Performances`.
-5. Copy the full `Cookie` request header.
-6. Save it as `TDF_COOKIE` in `.env` and GitHub Actions Secrets.
-
-## GitHub Action
-
-The delta workflow runs:
-
-- every 10 minutes
-- manually with `workflow_dispatch`
-
-It typechecks, runs unit tests, checks TDF, sends Telegram alerts only for newly seen `productionSeasonId:performanceId` combinations, and commits `data/seen-offers.json` if new performances were found.
-
-Removed performances do not trigger alerts.
-
-The daily current workflow runs at 9am America/New_York and sends the current availability digest plus an attached details file. It does not update `data/seen-offers.json`.
-
-## Telegram Commands
-
-The Cloudflare Worker handles Telegram commands through a webhook:
-
-- `/offers` sends the latest current offers summary and details file.
-- `/status` tests whether the saved TDF cookie still works.
-- `/cookie` returns a private form link where you can paste and test a fresh cookie.
-
-The old GitHub Actions polling workflow for Telegram commands is intentionally removed because Telegram does not allow `getUpdates` polling while a webhook is active.
+That opens a local Playwright browser profile. Log in manually, and the script waits until the TDF endpoint works, then saves `TDF_COOKIE` to `.env`.
 
 ## Run Logs
 
-Recent local and GitHub Action results are stored in `data/run-log.jsonl`.
+Local and workflow checker results are stored in:
+
+```text
+data/run-log.jsonl
+```
 
 Useful checks:
 
 ```sh
 tail -n 20 data/run-log.jsonl
-gh run list --limit 20
-gh run view <run-id> --log-failed
 ```
 
 Failure entries include `failureKind` when the checker can classify the problem:
 
 - `auth`: TDF redirected to login or showed a login/challenge page. Refresh the cookie.
-- `transient`: TDF or the runner returned a retryable server/network error. The next run will try again.
+- `transient`: TDF or the network returned a retryable server/network error.
 - `unexpected`: something else changed and needs inspection.
-
-## Cookie Expiration
-
-If TDF returns a login page, captcha page, or non-JSON response, the workflow sends a Telegram message telling you to refresh the saved cookie.
-
-This project does not bypass captchas. When TDF requires a human challenge, refresh the cookie manually, then update it with `/cookie` and in the `TDF_COOKIE` GitHub Actions secret if the scheduled workflows still use that secret.

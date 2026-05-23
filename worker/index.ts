@@ -36,6 +36,24 @@ export default {
       return json({ ok: true });
     }
 
+    if (request.method === "GET" && url.pathname === "/tdf-cookie") {
+      if (url.searchParams.get("token") !== env.COOKIE_FORM_TOKEN) {
+        return new Response("Not found", { status: 404 });
+      }
+
+      const cookie = await env.TDF_ALERTS.get(cookieKey);
+      if (!cookie) {
+        return new Response("No TDF cookie saved", { status: 404 });
+      }
+
+      return new Response(cookie, {
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "text/plain; charset=utf-8"
+        }
+      });
+    }
+
     if (request.method === "GET" && url.pathname === "/cookie") {
       if (url.searchParams.get("token") !== env.COOKIE_FORM_TOKEN) {
         return new Response("Not found", { status: 404 });
