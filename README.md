@@ -1,72 +1,135 @@
 # TDF Offer Alerts
 
-Private GitHub Action that checks TDF offers every 10 minutes and sends Telegram alerts for newly seen performances.
+Public-repo friendly GitHub Action that checks TDF offers every 10 minutes and sends Telegram alerts for newly seen performances.
 
-## What it does
+## How It Works
 
-- Connects to a Browserbase browser with a persistent context.
-- Opens the authenticated TDF offers page.
-- Calls `https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances`.
-- Compares every `productionSeasonId:performanceId` against `data/seen-offers.json`.
-- Sends a Telegram alert for new performances.
-- Commits the updated seen-offers snapshot back to the private repo.
+- The scheduled Action does a direct HTTP request to `https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances`.
+- Authentication comes from a `TDF_COOKIE` GitHub Actions secret.
+- New performances are detected by `productionSeasonId:performanceId`.
+- Seen performances are stored in `data/seen-offers.json` and committed back to the repo.
+- Telegram receives one alert per newly seen performance.
 
-This project does not bypass captchas. If TDF asks for a new human challenge or the session expires, the workflow sends a Telegram message asking you to refresh the Browserbase context and exits with failure.
+The scheduled workflow does not launch Browserbase or Playwright, which keeps the normal every-10-minute run as cheap as possible. Browserbase is only an optional helper for manual login/cookie refresh.
 
-## Required GitHub secrets
+## Public Repo Safety
 
-- `BROWSERBASE_API_KEY`
-- `BROWSERBASE_CONTEXT_ID`
-- `BROWSERBASE_PROJECT_ID` if Browserbase requires it for your account/project
+It is okay for this repo to be public if these stay secret:
+
+- `TDF_COOKIE`
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
+- `BROWSERBASE_API_KEY`
+- `BROWSERBASE_CONTEXT_ID`
+- `BROWSERBASE_PROJECT_ID`
 
-Do not commit TDF credentials, cookies, storage state, or exported browser sessions.
+Never commit `.env`, exported cookies, screenshots of logged-in pages, or browser storage files.
 
-## Telegram setup
+`data/seen-offers.json` is public-safe in the sense that it only contains seen offer IDs, but it does reveal what offers the watcher has observed.
 
-1. Message `@BotFather` in Telegram and create a bot.
-2. Save the bot token as `TELEGRAM_BOT_TOKEN`.
-3. Send a message to your bot.
-4. Use Telegram `getUpdates` or a chat-id helper bot to find your chat id.
-5. Save it as `TELEGRAM_CHAT_ID`.
+## Required GitHub Secrets
 
-## Browserbase session setup
+Add these in GitHub: `Settings` -> `Secrets and variables` -> `Actions`.
 
-1. Create a Browserbase API key.
-2. Add the Browserbase and Telegram environment variables locally in `.env`.
-3. If you do not have a context id, run `npm run create-context:local` and save the printed id as `BROWSERBASE_CONTEXT_ID`.
-4. Run `npm run refresh-session:local`.
-5. Open the printed Browserbase debugger URL and log in to TDF manually.
-6. Run the GitHub Action manually with `workflow_dispatch`.
+Required for scheduled runs:
 
-If the Action reports that login needs attention, refresh the Browserbase context by logging in manually again.
+```text
+TDF_COOKIE
+TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID
+```
 
-## Local test
+Optional local refresh helpers:
 
-Create a local `.env` from the example:
+```text
+BROWSERBASE_API_KEY
+BROWSERBASE_PROJECT_ID
+BROWSERBASE_CONTEXT_ID
+```
+
+## Local Setup
+
+Install dependencies:
+
+```sh
+npm install
+```
+
+Create local env:
 
 ```sh
 cp .env.example .env
 ```
 
-Fill in:
+Fill in Telegram and either paste a fresh `TDF_COOKIE` manually or use the Browserbase refresh flow below.
 
-```text
-BROWSERBASE_API_KEY=
-BROWSERBASE_PROJECT_ID=
-BROWSERBASE_CONTEXT_ID=
-TELEGRAM_BOT_TOKEN=
-TELEGRAM_CHAT_ID=
-```
-
-Then run:
+Run tests:
 
 ```sh
 npm test
-npm run create-context:local
-npm run refresh-session:local
+```
+
+Run the checker locally:
+
+```sh
 npm run start:local
 ```
 
-The first live `start:local` run will send alerts for every currently visible performance and write them to `data/seen-offers.json`. Commit that file after the first successful run if you do not want GitHub Actions to alert on the same existing performances again.
+The first successful run will alert on every currently visible performance and update `data/seen-offers.json`.
+
+## Telegram Setup
+
+1. Message `@BotFather` in Telegram.
+2. Create a bot with `/newbot`.
+3. Save the token as `TELEGRAM_BOT_TOKEN`.
+4. Send a message to your new bot.
+5. Visit `https://api.telegram.org/bot<token>/getUpdates`.
+6. Save the private chat id as `TELEGRAM_CHAT_ID`.
+
+## TDF Cookie Setup
+
+The Action needs a cookie header copied from a logged-in TDF browser session.
+
+Manual browser method:
+
+1. Log in to TDF in your browser.
+2. Open DevTools -> Network.
+3. Visit `https://nycgw47.tdf.org/TDFCustomOfferings/Current`.
+4. Find the request to `Current?handler=Performances`.
+5. Copy the full `Cookie` request header.
+6. Save it as `TDF_COOKIE` in `.env` and GitHub Actions Secrets.
+
+Browserbase helper method:
+
+```sh
+npm run create-context:local
+```
+
+Save the printed id as `BROWSERBASE_CONTEXT_ID` in `.env`, then:
+
+```sh
+npm run refresh-session:local
+```
+
+Open the printed Browserbase debugger URL and log in to TDF manually. After login:
+
+```sh
+npm run export-cookie:local
+```
+
+Copy the printed cookie header into `TDF_COOKIE`.
+
+## GitHub Action
+
+The workflow runs:
+
+- every 10 minutes
+- manually with `workflow_dispatch`
+
+It typechecks, runs unit tests, checks TDF, sends Telegram alerts, and commits `data/seen-offers.json` if new performances were found.
+
+## Cookie Expiration
+
+If TDF returns a login page, captcha page, or non-JSON response, the workflow sends a Telegram message telling you to refresh `TDF_COOKIE`.
+
+This project does not bypass captchas. When TDF requires a human challenge, refresh the cookie manually and update the secret.

@@ -39,9 +39,7 @@ jobs:
       - name: Check TDF offers
         run: npm run build && npm start
         env:
-          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
-          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
-          BROWSERBASE_CONTEXT_ID: ${{ secrets.BROWSERBASE_CONTEXT_ID }}
+          TDF_COOKIE: ${{ secrets.TDF_COOKIE }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 

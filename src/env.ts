@@ -1,7 +1,5 @@
 export type Env = {
-  browserbaseApiKey: string;
-  browserbaseProjectId?: string;
-  browserbaseContextId: string;
+  tdfCookie: string;
   telegramBotToken: string;
   telegramChatId: string;
   seenStatePath: string;
@@ -15,9 +13,7 @@ export type BrowserbaseEnv = {
 
 export function readEnv(env: NodeJS.ProcessEnv = process.env): Env {
   return {
-    browserbaseApiKey: required(env, "BROWSERBASE_API_KEY"),
-    browserbaseProjectId: env.BROWSERBASE_PROJECT_ID,
-    browserbaseContextId: required(env, "BROWSERBASE_CONTEXT_ID"),
+    tdfCookie: required(env, "TDF_COOKIE"),
     telegramBotToken: required(env, "TELEGRAM_BOT_TOKEN"),
     telegramChatId: required(env, "TELEGRAM_CHAT_ID"),
     seenStatePath: env.SEEN_STATE_PATH ?? "data/seen-offers.json"
