@@ -1,0 +1,70 @@
+<svg width="1280" height="520" viewBox="0 0 1280 520" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">TDF Offer Alerts banner</title>
+  <desc id="desc">A product banner showing Cloudflare, TDF, Browserbase, and Telegram connected by a resilient alert pipeline.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1280" y2="520" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#101820"/>
+      <stop offset="0.48" stop-color="#183642"/>
+      <stop offset="1" stop-color="#0C2B2E"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="140" y1="126" x2="1140" y2="418" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FAFC" stop-opacity="0.97"/>
+      <stop offset="1" stop-color="#E8F3F1" stop-opacity="0.95"/>
+    </linearGradient>
+    <filter id="shadow" x="90" y="88" width="1100" height="380" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="24" stdDeviation="24" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <rect width="1280" height="520" fill="url(#bg)"/>
+  <path d="M0 420 C190 350 326 470 516 398 C725 320 815 346 984 280 C1117 228 1209 232 1280 188 V520 H0 V420Z" fill="#39B9A8" fill-opacity="0.22"/>
+  <path d="M0 88 C210 138 350 34 542 92 C744 153 855 108 1033 60 C1146 29 1235 39 1280 58 V0 H0 V88Z" fill="#F6C453" fill-opacity="0.18"/>
+
+  <g filter="url(#shadow)">
+    <rect x="140" y="104" width="1000" height="330" rx="24" fill="url(#panel)"/>
+    <rect x="140.75" y="104.75" width="998.5" height="328.5" rx="23.25" stroke="#FFFFFF" stroke-opacity="0.8" stroke-width="1.5"/>
+  </g>
+
+  <text x="190" y="178" fill="#0F172A" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="54" font-weight="800" letter-spacing="0">TDF Offer Alerts</text>
+  <text x="192" y="220" fill="#334155" font-family="Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="23" font-weight="500">A self-healing ticket monitor for Passport offers, Telegram digests, and session-aware automation.</text>
+
+  <g transform="translate(190 278)">
+    <rect width="170" height="76" rx="14" fill="#FFFFFF"/>
+    <rect x="0.75" y="0.75" width="168.5" height="74.5" rx="13.25" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="22" y="33" fill="#0F172A" font-family="Inter, ui-sans-serif, system-ui" font-size="18" font-weight="800">Cloudflare</text>
+    <text x="22" y="56" fill="#64748B" font-family="Inter, ui-sans-serif, system-ui" font-size="15" font-weight="600">Cron + KV + Bot</text>
+  </g>
+
+  <g transform="translate(406 278)">
+    <rect width="170" height="76" rx="14" fill="#FFFFFF"/>
+    <rect x="0.75" y="0.75" width="168.5" height="74.5" rx="13.25" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="22" y="33" fill="#0F172A" font-family="Inter, ui-sans-serif, system-ui" font-size="18" font-weight="800">TDF</text>
+    <text x="22" y="56" fill="#64748B" font-family="Inter, ui-sans-serif, system-ui" font-size="15" font-weight="600">Active session touch</text>
+  </g>
+
+  <g transform="translate(622 278)">
+    <rect width="170" height="76" rx="14" fill="#FFFFFF"/>
+    <rect x="0.75" y="0.75" width="168.5" height="74.5" rx="13.25" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="22" y="33" fill="#0F172A" font-family="Inter, ui-sans-serif, system-ui" font-size="18" font-weight="800">Telegram</text>
+    <text x="22" y="56" fill="#64748B" font-family="Inter, ui-sans-serif, system-ui" font-size="15" font-weight="600">Alerts + commands</text>
+  </g>
+
+  <g transform="translate(838 278)">
+    <rect width="218" height="76" rx="14" fill="#FFFFFF"/>
+    <rect x="0.75" y="0.75" width="216.5" height="74.5" rx="13.25" stroke="#CBD5E1" stroke-width="1.5"/>
+    <text x="22" y="33" fill="#0F172A" font-family="Inter, ui-sans-serif, system-ui" font-size="18" font-weight="800">Browserbase fallback</text>
+    <text x="22" y="56" fill="#64748B" font-family="Inter, ui-sans-serif, system-ui" font-size="15" font-weight="600">Runs only when auth fails</text>
+  </g>
+
+  <path d="M360 316 H406" stroke="#0F766E" stroke-width="4" stroke-linecap="round"/>
+  <path d="M576 316 H622" stroke="#0F766E" stroke-width="4" stroke-linecap="round"/>
+  <path d="M792 316 H838" stroke="#0F766E" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="384" cy="316" r="5" fill="#F6C453"/>
+  <circle cx="600" cy="316" r="5" fill="#F6C453"/>
+  <circle cx="816" cy="316" r="5" fill="#F6C453"/>
+
+  <g transform="translate(190 382)">
+    <rect width="866" height="28" rx="14" fill="#0F766E" fill-opacity="0.12"/>
+    <text x="18" y="20" fill="#0F766E" font-family="Inter, ui-sans-serif, system-ui" font-size="15" font-weight="800">Every run logs cookie health, TDF status, refreshed Set-Cookie values, alert delivery, and recovery decisions.</text>
+  </g>
+</svg>
