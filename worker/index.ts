@@ -27,6 +27,11 @@ type TdfOffer = {
   performances: TdfPerformance[];
 };
 
+type TdfFetchResult = {
+  offers: TdfOffer[];
+  cookie: string;
+};
+
 type AlertItem = {
   id: string;
   title: string;
@@ -120,14 +125,14 @@ export default {
       const cookie = normalizeCookie(String(form.get("cookie") ?? ""));
       const run = createRun("cookie", "cookie-form");
       try {
-        const offers = await fetchTdfOffers(cookie, run);
-        await env.TDF_ALERTS.put(cookieKey, cookie);
+        const result = await fetchTdfOffers(cookie, run);
+        await env.TDF_ALERTS.put(cookieKey, result.cookie);
         finishRun(run, "success", {
-          shows: offers.length,
-          performances: countPerformances(offers)
+          shows: result.offers.length,
+          performances: countPerformances(result.offers)
         });
         await appendLog(env, run);
-        return html(cookieForm(`Saved. ${offers.length} shows available.`));
+        return html(cookieForm(`Saved. ${result.offers.length} shows available.`));
       } catch (error) {
         finishRun(run, "failure", {
           failureKind: classifyError(error),
@@ -205,7 +210,9 @@ async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
 
   try {
     const cookie = await readCookie(env, run);
-    const offers = await fetchTdfOffers(cookie, run);
+    const result = await fetchTdfOffers(cookie, run);
+    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    const offers = result.offers;
     const items = flattenOffers(offers);
     const seen = await readSeen(env, run);
     const newItems = items.filter((item) => !seen.has(item.id));
@@ -257,7 +264,9 @@ async function runDailyDigest(env: Env, trigger: string): Promise<RunLog> {
   const run = createRun("daily", trigger);
   try {
     const cookie = await readCookie(env, run);
-    const offers = await fetchTdfOffers(cookie, run);
+    const result = await fetchTdfOffers(cookie, run);
+    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    const offers = result.offers;
     const items = flattenOffers(offers);
     const sendStarted = Date.now();
     await sendMessage(env, formatSummary(offers, items));
@@ -290,7 +299,9 @@ async function runCommandOffers(env: Env): Promise<void> {
   const run = createRun("command", "telegram:/offers");
   try {
     const cookie = await readCookie(env, run);
-    const offers = await fetchTdfOffers(cookie, run);
+    const result = await fetchTdfOffers(cookie, run);
+    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    const offers = result.offers;
     const items = flattenOffers(offers);
     const sendStarted = Date.now();
     await sendMessage(env, formatSummary(offers, items));
@@ -325,7 +336,9 @@ async function runStatus(env: Env): Promise<void> {
   const run = createRun("status", "telegram:/status");
   try {
     const cookie = await readCookie(env, run);
-    const offers = await fetchTdfOffers(cookie, run);
+    const result = await fetchTdfOffers(cookie, run);
+    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    const offers = result.offers;
     const sendStarted = Date.now();
     await sendMessage(env, `TDF cookie works. ${offers.length} shows, ${countPerformances(offers)} performances available.`);
     addStep(run, "send-telegram-status", "success", { durationMs: Date.now() - sendStarted });
@@ -409,7 +422,8 @@ async function readCookie(env: Env, run: RunLog): Promise<string> {
   return cookie;
 }
 
-async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfOffer[]> {
+async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFetchResult> {
+  let activeCookie = await touchTdfMainPage(cookie, run);
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const started = Date.now();
@@ -419,7 +433,7 @@ async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfOffer[]> 
           Accept: "application/json, text/javascript, */*; q=0.01",
           "Accept-Language": "en-US,en;q=0.9",
           "Content-Type": "application/json",
-          Cookie: cookie,
+          Cookie: activeCookie,
           Referer: tdfOffersUrl,
           "User-Agent":
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15",
@@ -458,7 +472,7 @@ async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfOffer[]> 
         shows: offers.length,
         performances: countPerformances(offers)
       });
-      return offers;
+      return { offers, cookie: activeCookie };
     } catch (error) {
       lastError = error;
       if (attempt < 3 && classifyError(error) === "transient") {
@@ -471,6 +485,75 @@ async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfOffer[]> 
   }
 
   throw lastError;
+}
+
+async function touchTdfMainPage(cookie: string, run: RunLog): Promise<string> {
+  const started = Date.now();
+  const response = await fetch(tdfOffersUrl, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      Cookie: cookie,
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+    }
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  const setCookies = getSetCookieHeaders(response);
+  const setCookieNames = setCookies.map((value) => value.split("=", 1)[0]).filter(Boolean);
+  const authenticated = /logged\s+in\s+as|log\s*out|current offers/i.test(body);
+  const details = {
+    status: response.status,
+    finalUrl: response.url,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started,
+    authenticatedSignals: authenticated,
+    setCookieCount: setCookies.length,
+    setCookieNames
+  };
+
+  if (response.url.includes("/account/login") || response.url.includes("my.tdf.org/account")) {
+    addStep(run, "touch-tdf-main-page", "failure", details);
+    throw new TdfError(`TDF main page redirected to login: ${response.url}`, "auth");
+  }
+  if (!response.ok) {
+    addStep(run, "touch-tdf-main-page", "failure", details);
+    throw new TdfError(`TDF main page returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+  }
+  if (looksLikeAuthFailure(body) && !authenticated) {
+    addStep(run, "touch-tdf-main-page", "failure", {
+      ...details,
+      bodyPreview: body.slice(0, 200)
+    });
+    throw new TdfError("TDF main page showed a login or access challenge.", "auth");
+  }
+
+  addStep(run, "touch-tdf-main-page", "success", details);
+  return mergeSetCookies(cookie, setCookies);
+}
+
+async function persistRefreshedCookie(
+  env: Env,
+  originalCookie: string,
+  refreshedCookie: string,
+  run: RunLog
+): Promise<void> {
+  if (originalCookie === refreshedCookie) {
+    addStep(run, "persist-refreshed-cookie", "skipped", {
+      reason: "TDF did not send updated cookie values."
+    });
+    return;
+  }
+
+  const started = Date.now();
+  await env.TDF_ALERTS.put(cookieKey, refreshedCookie);
+  addStep(run, "persist-refreshed-cookie", "success", {
+    durationMs: Date.now() - started,
+    oldCookieBytes: originalCookie.length,
+    newCookieBytes: refreshedCookie.length
+  });
 }
 
 async function readSeen(env: Env, run: RunLog): Promise<Set<string>> {
@@ -805,6 +888,42 @@ function classifyError(error: unknown): TdfError["kind"] {
 
 function looksLikeAuthFailure(body: string): boolean {
   return /captcha|access denied|error 15|forbidden|unauthori[sz]ed|password|sign\s+in|log\s+in/i.test(body);
+}
+
+function getSetCookieHeaders(response: Response): string[] {
+  const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+  const setCookies = headers.getSetCookie?.();
+  if (setCookies?.length) {
+    return setCookies;
+  }
+
+  const setCookie = response.headers.get("set-cookie");
+  return setCookie ? [setCookie] : [];
+}
+
+function mergeSetCookies(cookie: string, setCookies: string[]): string {
+  if (setCookies.length === 0) {
+    return cookie;
+  }
+
+  const values = new Map<string, string>();
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    const separatorIndex = trimmed.indexOf("=");
+    if (separatorIndex > 0) {
+      values.set(trimmed.slice(0, separatorIndex), trimmed.slice(separatorIndex + 1));
+    }
+  }
+
+  for (const setCookie of setCookies) {
+    const [nameValue] = setCookie.split(";");
+    const separatorIndex = nameValue.indexOf("=");
+    if (separatorIndex > 0) {
+      values.set(nameValue.slice(0, separatorIndex).trim(), nameValue.slice(separatorIndex + 1));
+    }
+  }
+
+  return [...values.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
 function errorMessage(error: unknown): string {
