@@ -12,6 +12,8 @@ type LoginEnv = {
   browserbaseApiKey: string;
   browserbaseProjectId: string;
   browserbaseContextId?: string;
+  cookieFormToken?: string;
+  workerBaseUrl: string;
   tdfEmail: string;
   tdfPassword: string;
 };
@@ -57,6 +59,7 @@ async function main(): Promise<void> {
       const performances = flattenOffers(offers);
       await upsertEnvValue("TDF_COOKIE", cookie);
       await upsertEnvValue("BROWSERBASE_CONTEXT_ID", contextId);
+      await uploadCookieToWorker(cookie, env);
 
       console.log(`Saved TDF_COOKIE to .env.`);
       console.log(`Verified ${offers.length} shows and ${performances.length} performances.`);
@@ -149,6 +152,8 @@ function readLoginEnv(env: NodeJS.ProcessEnv = process.env): LoginEnv {
     browserbaseApiKey: required(env, "BROWSERBASE_API_KEY"),
     browserbaseProjectId: required(env, "BROWSERBASE_PROJECT_ID"),
     browserbaseContextId: env.BROWSERBASE_CONTEXT_ID || undefined,
+    cookieFormToken: env.COOKIE_FORM_TOKEN || undefined,
+    workerBaseUrl: env.WORKER_BASE_URL || "https://tdf-alerts-bot.salmanrazzaq94.workers.dev",
     tdfEmail: required(env, "TDF_EMAIL"),
     tdfPassword: required(env, "TDF_PASSWORD")
   };
@@ -171,6 +176,29 @@ async function upsertEnvValue(key: string, value: string): Promise<void> {
     : `${text}${text.endsWith("\n") || text.length === 0 ? "" : "\n"}${line}\n`;
 
   await writeFile(envPath, next);
+}
+
+async function uploadCookieToWorker(cookie: string, env: LoginEnv): Promise<void> {
+  if (!env.cookieFormToken) {
+    console.log("COOKIE_FORM_TOKEN is not set, so I did not update Cloudflare KV.");
+    return;
+  }
+
+  const form = new FormData();
+  form.set("cookie", cookie);
+  const response = await fetch(
+    `${env.workerBaseUrl.replace(/\/$/, "")}/cookie?token=${encodeURIComponent(env.cookieFormToken)}`,
+    {
+      method: "POST",
+      body: form
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Could not update Cloudflare KV cookie: ${response.status} ${await response.text()}`);
+  }
+
+  console.log("Updated Cloudflare KV TDF_COOKIE through the Worker.");
 }
 
 main().catch((error) => {

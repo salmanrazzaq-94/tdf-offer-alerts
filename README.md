@@ -1,41 +1,140 @@
 # TDF Offer Alerts
 
-Phone-first TDF availability watcher with Telegram alerts, a Cloudflare Worker command bot, and optional Browserbase login testing.
+Cloudflare Worker + Telegram bot for TDF offer monitoring.
 
-## Current Direction
+## Production Design
 
-The preferred V1 shape is:
+Cloudflare is the app. GitHub Actions are not used for runtime checks.
 
-- Cloudflare Worker handles Telegram commands over a webhook.
-- Cloudflare KV stores the current TDF cookie for the bot.
-- GitHub Actions can still run scheduled delta checks and 9am digests, but they fetch the TDF cookie from Cloudflare at runtime.
-- `/offers` sends the latest current offers summary and a timestamped text attachment.
-- `/status` checks whether the saved cookie still works.
-- `/cookie` returns a private form link for saving a fresh cookie.
-- Local scripts are used for development, testing, and cookie refresh experiments.
-- Browserbase is used only when the saved cookie expires and needs refreshing.
+- Cloudflare Worker receives Telegram commands.
+- Cloudflare Cron runs scheduled checks.
+- Cloudflare KV stores the TDF cookie, seen offer IDs, auth state, and recent run logs.
+- Browserbase is only used when the saved cookie expires and needs a refresh.
+- The normal checker never receives Browserbase credentials or TDF credentials.
 
-This project does not bypass captchas or security challenges. If TDF shows a captcha, access-denied page, MFA, or a human verification step, the automation stops and reports that the session needs attention.
+## Commands
 
-## How Offers Are Checked
+Telegram commands:
 
-The checker requests:
+- `/offers`: fetch current TDF offers now and send a summary plus text attachment.
+- `/status`: test whether the saved cookie still works.
+- `/logs`: show recent run summaries.
+- `/cookie`: get a private form link for pasting a fresh cookie manually.
 
-```text
-https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances
+Private HTTP test endpoints, protected by `COOKIE_FORM_TOKEN`:
+
+- `/run-delta?token=...`: run the delta checker now.
+- `/run-daily?token=...`: send the current digest now.
+- `/logs?token=...`: inspect full structured logs as JSON.
+- `/cookie?token=...`: paste and test a fresh cookie.
+
+## Scheduled Runs
+
+Configured in `wrangler.toml`:
+
+- `*/10 * * * *`: delta check every 10 minutes.
+- `0 13 * * *` and `0 14 * * *`: daily digest guard for 9am America/New_York.
+
+The double daily cron covers daylight saving time. The Worker sends only when New York local hour is actually `09`.
+
+## Logging
+
+Every Worker run writes a structured log entry to Cloudflare KV key `RUN_LOGS`.
+
+Each log includes:
+
+- run id, event, trigger, start/end time, duration
+- success/failure/skipped status
+- show count, performance count, new performance count
+- notification status
+- failure kind: `auth`, `transient`, or `unexpected`
+- step-by-step diagnostics such as cookie bytes, session cookie presence, TDF HTTP status, content type, response size, retry waits, seen-state counts, and notification throttle decisions
+
+View logs:
+
+```sh
+curl "https://tdf-alerts-bot.salmanrazzaq94.workers.dev/logs?token=$COOKIE_FORM_TOKEN"
 ```
 
-It parses the returned JSON into shows and performances. A unique performance is:
+Or send `/logs` in Telegram.
+
+## Cookie Strategy
+
+The cheapest robust strategy is:
+
+1. Use the saved cookie in Cloudflare KV for all normal checks.
+2. If `/status`, `/offers`, or cron says the cookie failed, do not keep spamming alerts.
+3. Refresh the cookie with Browserbase only when needed.
+4. Browserbase logs in, verifies the TDF endpoint, and updates Cloudflare KV through the Worker.
+
+Cookie expiry cannot reliably be prolonged from our side. TDF controls server-side sessions and security cookies, and can invalidate them based on time, IP, browser fingerprint, logout, or security rotation.
+
+## Browserbase Refresh
+
+Required local `.env` values:
 
 ```text
-productionSeasonId:performanceId
+BROWSERBASE_API_KEY=
+BROWSERBASE_PROJECT_ID=
+BROWSERBASE_CONTEXT_ID=
+TDF_EMAIL=
+TDF_PASSWORD=
+COOKIE_FORM_TOKEN=
+WORKER_BASE_URL=https://tdf-alerts-bot.salmanrazzaq94.workers.dev
 ```
 
-Removed offers are ignored. New shows or new times can be alerted in the delta checker. Current digest messages include all currently available shows.
+`BROWSERBASE_CONTEXT_ID` is optional the first time. If missing, the script creates a persistent Browserbase Context and saves the ID to `.env`.
 
-## Public Repo Safety
+Run only when the saved cookie has expired:
 
-It is okay for the repo to be public if these stay secret:
+```sh
+npm run login:browserbase
+```
+
+The script:
+
+- opens Browserbase headless with Playwright over CDP
+- logs into `https://my.tdf.org/account/login`
+- stops if TDF shows a captcha/access-denied/security challenge
+- verifies the performances endpoint
+- saves `TDF_COOKIE` to `.env`
+- updates Cloudflare KV by POSTing to the Worker cookie form endpoint
+
+## Manual Fallback
+
+If Browserbase hits a human challenge:
+
+```sh
+npm run install-browser
+npm run login:local
+```
+
+Then paste the saved cookie with `/cookie`, or keep `COOKIE_FORM_TOKEN` set and use the Worker form URL.
+
+## Local Development
+
+Install dependencies:
+
+```sh
+npm install
+```
+
+Run checks/tests:
+
+```sh
+npm run check
+npm test
+```
+
+Deploy Worker:
+
+```sh
+npm run worker:deploy
+```
+
+## Secrets
+
+Keep these out of git:
 
 - `TDF_COOKIE`
 - `TELEGRAM_BOT_TOKEN`
@@ -48,168 +147,3 @@ It is okay for the repo to be public if these stay secret:
 - `TDF_PASSWORD`
 
 Never commit `.env`, exported cookies, screenshots of logged-in pages, or browser storage files.
-
-## Local Setup
-
-Install dependencies:
-
-```sh
-npm install
-```
-
-Create local env:
-
-```sh
-cp .env.example .env
-```
-
-Fill in the values you need for the script you are running.
-
-Run tests:
-
-```sh
-npm test
-```
-
-Run the local checker with `TDF_COOKIE` from `.env`:
-
-```sh
-npm run start:local
-```
-
-Send the current digest locally:
-
-```sh
-npm run send-current:local
-```
-
-## Cloudflare Worker Bot
-
-The Worker is the phone-friendly surface:
-
-- `/offers`: sends the latest current TDF offers and details file.
-- `/status`: tests whether the saved cookie works.
-- `/cookie`: sends a private Cloudflare form URL for pasting a fresh cookie.
-- `/help`: lists commands.
-
-Deploy:
-
-```sh
-npm run worker:deploy
-```
-
-The Worker stores the cookie in Cloudflare KV under:
-
-```text
-TDF_COOKIE
-```
-
-## Browserbase Login Test
-
-Browserbase may let us run a normal headless login flow and export fresh cookies automatically. This only works if TDF serves the normal login form and does not require a human challenge.
-
-Use Browserbase only as a refresh path when the saved cookie fails. Normal `/offers` and `/status` checks should reuse the saved cookie from Cloudflare KV.
-
-Required local `.env` values:
-
-```text
-BROWSERBASE_API_KEY=
-BROWSERBASE_PROJECT_ID=
-BROWSERBASE_CONTEXT_ID=
-TDF_EMAIL=
-TDF_PASSWORD=
-```
-
-`BROWSERBASE_CONTEXT_ID` is optional the first time. If it is missing, the script creates a persistent Browserbase Context and saves the ID to `.env`.
-
-Run:
-
-```sh
-npm run login:browserbase
-```
-
-What it does:
-
-- Creates a Browserbase session attached to the persistent Context.
-- Connects Playwright over CDP.
-- Opens `https://my.tdf.org/account/login`.
-- Fills the TDF email and password from local env.
-- Stops if TDF shows a captcha, access-denied page, or security challenge.
-- Opens the TDF offers page.
-- Exports cookies and verifies the performances JSON endpoint.
-- Saves the working `TDF_COOKIE` to `.env`.
-
-Browserbase Context docs: [Contexts](https://docs.browserbase.com/features/contexts)
-
-## GitHub Actions
-
-GitHub Actions are kept for scheduled checks:
-
-- `Check TDF Offers`: runs every 10 minutes and alerts only on newly seen performances.
-- `Daily Current TDF Offers`: sends a 9am America/New_York digest with all current offers.
-
-The workflows do not store the TDF cookie in GitHub Secrets. Instead, they fetch it from the Cloudflare Worker:
-
-```text
-https://tdf-alerts-bot.salmanrazzaq94.workers.dev/tdf-cookie?token=...
-```
-
-Required GitHub Actions secrets:
-
-```text
-COOKIE_FORM_TOKEN
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
-```
-
-The `COOKIE_FORM_TOKEN` must match the secret configured on the Cloudflare Worker. This lets GitHub retrieve the current cookie from Cloudflare KV without duplicating `TDF_COOKIE` in GitHub.
-
-## Cookie Lifetime
-
-TDF controls cookie lifetime on its servers. The browser may show some cookies as `Session`, while others have future dates, but the authenticated session can still stop working earlier.
-
-Common reasons:
-
-- TDF invalidates the server-side session.
-- The login was created from one browser/IP/fingerprint and reused from another.
-- Imperva/security cookies rotate.
-- The account logs out or TDF forces a fresh shared-session handshake.
-- A security challenge appears and requires a human browser session.
-
-There is no reliable client-side setting that prolongs this. The practical strategy is:
-
-- Reuse the existing cookie until `/status` or `/offers` says it failed.
-- Run `npm run login:browserbase` only after the cookie expires.
-- Save the refreshed `TDF_COOKIE` to Cloudflare KV.
-- Fall back to `npm run login:local` if Browserbase hits a human challenge.
-
-## Local Manual Login Fallback
-
-If Browserbase cannot complete the login because TDF requires a human challenge, use the local browser helper:
-
-```sh
-npm run install-browser
-npm run login:local
-```
-
-That opens a local Playwright browser profile. Log in manually, and the script waits until the TDF endpoint works, then saves `TDF_COOKIE` to `.env`.
-
-## Run Logs
-
-Local and workflow checker results are stored in:
-
-```text
-data/run-log.jsonl
-```
-
-Useful checks:
-
-```sh
-tail -n 20 data/run-log.jsonl
-```
-
-Failure entries include `failureKind` when the checker can classify the problem:
-
-- `auth`: TDF redirected to login or showed a login/challenge page. Refresh the cookie.
-- `transient`: TDF or the network returned a retryable server/network error.
-- `unexpected`: something else changed and needs inspection.
