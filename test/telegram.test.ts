@@ -3,7 +3,8 @@ import test from "node:test";
 import {
   formatAuthFailureMessage,
   formatDigestSummary,
-  formatOfferDetailsFile
+  formatOfferDetailsFile,
+  timestampedDetailsFilename
 } from "../src/telegram.js";
 import type { AlertItem } from "../src/tdf.js";
 
@@ -73,4 +74,13 @@ test("escapes auth failure text", () => {
 
   assert.match(message, /TDF login needs attention/);
   assert.match(message, /Returned &lt;html&gt; &amp; login page/);
+});
+
+test("formats timestamped details filenames", () => {
+  const filename = timestampedDetailsFilename(
+    "tdf-offers-current",
+    new Date("2026-05-23T15:05:00Z")
+  );
+
+  assert.equal(filename, "tdf-offers-current-20260523-1105-ny.txt");
 });

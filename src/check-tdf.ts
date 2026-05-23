@@ -12,7 +12,8 @@ import {
   formatDigestSummary,
   formatOfferDetailsFile,
   sendTelegramDocument,
-  sendTelegramMessage
+  sendTelegramMessage,
+  timestampedDetailsFilename
 } from "./telegram.js";
 
 async function main(): Promise<void> {
@@ -36,7 +37,12 @@ async function main(): Promise<void> {
       `Fetched ${alertItems.length} TDF performances. Sending one summary and one details file for ${newAlerts.length} new performances.`
     );
     await sendTelegramMessage(telegram, summary);
-    await sendTelegramDocument(telegram, "tdf-offers.txt", details, "Full TDF availability details");
+    await sendTelegramDocument(
+      telegram,
+      timestampedDetailsFilename("tdf-offers-delta"),
+      details,
+      "Full TDF availability details"
+    );
 
     await writeSeenState(env.seenStatePath, markSeen(previousState, newAlerts));
   } catch (error) {

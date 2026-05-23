@@ -102,6 +102,21 @@ export function formatOfferDetailsFile(offers: TdfOffer[], newItems: AlertItem[]
   return lines.join("\n");
 }
 
+export function timestampedDetailsFilename(prefix: string, date = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).formatToParts(date);
+  const value = (type: string) => parts.find((part) => part.type === type)?.value ?? "00";
+
+  return `${prefix}-${value("year")}${value("month")}${value("day")}-${value("hour")}${value("minute")}-ny.txt`;
+}
+
 export function formatAuthFailureMessage(reason: string): string {
   return [
     "<b>TDF login needs attention</b>",

@@ -5,7 +5,8 @@ import {
   formatDigestSummary,
   formatOfferDetailsFile,
   sendTelegramDocument,
-  sendTelegramMessage
+  sendTelegramMessage,
+  timestampedDetailsFilename
 } from "./telegram.js";
 
 async function main(): Promise<void> {
@@ -17,7 +18,7 @@ async function main(): Promise<void> {
   await sendTelegramMessage(telegram, formatDigestSummary(offers, items));
   await sendTelegramDocument(
     telegram,
-    "tdf-offers-current.txt",
+    timestampedDetailsFilename("tdf-offers-current"),
     formatOfferDetailsFile(offers, items),
     "Current TDF availability details"
   );
