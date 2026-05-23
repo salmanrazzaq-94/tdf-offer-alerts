@@ -52,12 +52,13 @@ type RunStep = {
 
 type RunLog = {
   id: string;
-  event: "delta" | "daily" | "command" | "cookie" | "status";
+  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug";
   status: "success" | "failure" | "skipped";
   trigger: string;
   startedAt: string;
   finishedAt: string;
   durationMs: number;
+  version: string;
   shows?: number;
   performances?: number;
   newPerformances?: number;
@@ -74,14 +75,45 @@ type AuthState = {
   lastRefreshAttemptedAt: string | null;
 };
 
+type CookieMeta = {
+  savedAt: string | null;
+  source: string | null;
+  cookieBytes: number;
+  hasSessionCookie: boolean;
+  hasTnewCookie: boolean;
+};
+
+type HealthState = {
+  lastStaleNotifiedAt: string | null;
+};
+
+type DebugSnapshot = {
+  version: string;
+  generatedAt: string;
+  cookie: CookieMeta;
+  auth: AuthState;
+  health: HealthState;
+  lastSuccess: RunLog | null;
+  lastFailure: RunLog | null;
+  lastRun: RunLog | null;
+  recentRuns: Array<Pick<RunLog, "finishedAt" | "event" | "status" | "trigger" | "shows" | "performances" | "newPerformances" | "failureKind" | "message">>;
+};
+
 const cookieKey = "TDF_COOKIE";
+const cookieMetaKey = "TDF_COOKIE_META";
 const seenKey = "SEEN_OFFERS";
 const logsKey = "RUN_LOGS";
 const authStateKey = "AUTH_STATE";
+const healthStateKey = "HEALTH_STATE";
+const deltaLockKey = "DELTA_LOCK";
+const workerVersion = "2026-05-23.cloudflare-core-v2";
 const tdfOffersUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
 const tdfPerformancesUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
 const authFailureNotifyIntervalMs = 12 * 60 * 60 * 1000;
 const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
+const staleSuccessAlertAfterMs = 30 * 60 * 1000;
+const staleSuccessNotifyIntervalMs = 60 * 60 * 1000;
+const deltaLockTtlMs = 8 * 60 * 1000;
 const maxLogs = 200;
 
 export default {
@@ -97,6 +129,21 @@ export default {
         return new Response("Not found", { status: 404 });
       }
       return json(await readLogs(env));
+    }
+
+    if (request.method === "GET" && url.pathname === "/debug") {
+      if (!isAuthorized(url, env)) {
+        return new Response("Not found", { status: 404 });
+      }
+      return json(await buildDebugSnapshot(env));
+    }
+
+    if (request.method === "GET" && url.pathname === "/verify-cookie") {
+      if (!isAuthorized(url, env)) {
+        return new Response("Not found", { status: 404 });
+      }
+      const result = await runCookieVerification(env, "manual-http");
+      return json(result);
     }
 
     if (request.method === "GET" && url.pathname === "/run-delta") {
@@ -131,7 +178,7 @@ export default {
       const run = createRun("cookie", "cookie-form");
       try {
         const result = await fetchTdfOffers(cookie, run);
-        await env.TDF_ALERTS.put(cookieKey, result.cookie);
+        await saveCookie(env, result.cookie, "cookie-form", run);
         finishRun(run, "success", {
           shows: result.offers.length,
           performances: countPerformances(result.offers)
@@ -198,6 +245,11 @@ async function handleTelegram(update: TelegramUpdate, env: Env, requestUrl: stri
     return;
   }
 
+  if (text === "/debug" || text === "/debug@tdf_alert_watcher_bot") {
+    await runDebug(env);
+    return;
+  }
+
   if (text === "/logs" || text === "/logs@tdf_alert_watcher_bot") {
     const logs = await readLogs(env);
     await sendMessage(env, formatLogs(logs.slice(-8)));
@@ -205,15 +257,26 @@ async function handleTelegram(update: TelegramUpdate, env: Env, requestUrl: stri
   }
 
   if (text === "/help" || text === "/start") {
-    await sendMessage(env, "Commands: /offers, /status, /logs, /cookie");
+    await sendMessage(env, "Commands: /offers, /status, /debug, /logs, /cookie");
   }
 }
 
 async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
   const run = createRun("delta", trigger);
   let notificationSent = false;
+  const lock = trigger.startsWith("cron:") ? await acquireDeltaLock(env, run) : { acquired: true };
 
   try {
+    if (!lock.acquired) {
+      finishRun(run, "skipped", {
+        message: "Another recent delta check is already running."
+      });
+      await appendLog(env, run);
+      return run;
+    }
+    if (trigger.startsWith("cron:")) {
+      await checkStaleHealth(env, run);
+    }
     const cookie = await readCookie(env, run);
     const result = await fetchTdfOffers(cookie, run);
     await persistRefreshedCookie(env, cookie, result.cookie, run);
@@ -259,8 +322,33 @@ async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
     });
   } catch (error) {
     await handleCheckFailure(env, run, error);
+  } finally {
+    if (lock.acquired && trigger.startsWith("cron:")) {
+      await releaseDeltaLock(env, run);
+    }
   }
 
+  await appendLog(env, run);
+  return run;
+}
+
+async function runCookieVerification(env: Env, trigger: string): Promise<RunLog> {
+  const run = createRun("verify", trigger);
+  try {
+    const cookie = await readCookie(env, run);
+    const result = await fetchTdfOffers(cookie, run);
+    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    finishRun(run, "success", {
+      shows: result.offers.length,
+      performances: countPerformances(result.offers),
+      message: "Saved TDF cookie works end to end."
+    });
+  } catch (error) {
+    finishRun(run, "failure", {
+      failureKind: classifyError(error),
+      message: errorMessage(error)
+    });
+  }
   await appendLog(env, run);
   return run;
 }
@@ -343,13 +431,13 @@ async function runStatus(env: Env): Promise<void> {
     const cookie = await readCookie(env, run);
     const result = await fetchTdfOffers(cookie, run);
     await persistRefreshedCookie(env, cookie, result.cookie, run);
-    const offers = result.offers;
+    const snapshot = await buildDebugSnapshot(env);
     const sendStarted = Date.now();
-    await sendMessage(env, `TDF cookie works. ${offers.length} shows, ${countPerformances(offers)} performances available.`);
+    await sendMessage(env, formatStatus(snapshot, result.offers));
     addStep(run, "send-telegram-status", "success", { durationMs: Date.now() - sendStarted });
     finishRun(run, "success", {
-      shows: offers.length,
-      performances: countPerformances(offers),
+      shows: result.offers.length,
+      performances: countPerformances(result.offers),
       notificationSent: true
     });
   } catch (error) {
@@ -358,6 +446,25 @@ async function runStatus(env: Env): Promise<void> {
       failureKind: classifyError(error),
       message: errorMessage(error),
       notificationSent: true
+    });
+  }
+  await appendLog(env, run);
+}
+
+async function runDebug(env: Env): Promise<void> {
+  const run = createRun("debug", "telegram:/debug");
+  try {
+    const snapshot = await buildDebugSnapshot(env);
+    await sendMessage(env, formatDebug(snapshot));
+    addStep(run, "send-telegram-debug", "success");
+    finishRun(run, "success", {
+      notificationSent: true,
+      message: "Debug snapshot sent."
+    });
+  } catch (error) {
+    finishRun(run, "failure", {
+      failureKind: classifyError(error),
+      message: errorMessage(error)
     });
   }
   await appendLog(env, run);
@@ -556,12 +663,61 @@ async function persistRefreshedCookie(
   }
 
   const started = Date.now();
-  await env.TDF_ALERTS.put(cookieKey, refreshedCookie);
+  await saveCookie(env, refreshedCookie, "tdf-set-cookie", run, started);
   addStep(run, "persist-refreshed-cookie", "success", {
     durationMs: Date.now() - started,
     oldCookieBytes: originalCookie.length,
     newCookieBytes: refreshedCookie.length
   });
+}
+
+async function saveCookie(
+  env: Env,
+  cookie: string,
+  source: string,
+  run?: RunLog,
+  started = Date.now()
+): Promise<void> {
+  await env.TDF_ALERTS.put(cookieKey, cookie);
+  await env.TDF_ALERTS.put(
+    cookieMetaKey,
+    JSON.stringify({
+      savedAt: new Date().toISOString(),
+      source,
+      cookieBytes: cookie.length,
+      hasSessionCookie: cookie.includes(".TDFCustomOfferings.Session"),
+      hasTnewCookie: cookie.includes("TNEW")
+    } satisfies CookieMeta)
+  );
+  if (run && source !== "tdf-set-cookie") {
+    addStep(run, "save-cookie", "success", {
+      durationMs: Date.now() - started,
+      source,
+      cookieBytes: cookie.length
+    });
+  }
+}
+
+async function readCookieMeta(env: Env): Promise<CookieMeta> {
+  const raw = await env.TDF_ALERTS.get(cookieMetaKey);
+  if (!raw) {
+    const cookie = await env.TDF_ALERTS.get(cookieKey);
+    return {
+      savedAt: null,
+      source: null,
+      cookieBytes: cookie?.length ?? 0,
+      hasSessionCookie: cookie?.includes(".TDFCustomOfferings.Session") ?? false,
+      hasTnewCookie: cookie?.includes("TNEW") ?? false
+    };
+  }
+  const parsed = JSON.parse(raw) as Partial<CookieMeta>;
+  return {
+    savedAt: parsed.savedAt ?? null,
+    source: parsed.source ?? null,
+    cookieBytes: parsed.cookieBytes ?? 0,
+    hasSessionCookie: parsed.hasSessionCookie ?? false,
+    hasTnewCookie: parsed.hasTnewCookie ?? false
+  };
 }
 
 async function readSeen(env: Env, run: RunLog): Promise<Set<string>> {
@@ -710,6 +866,148 @@ async function maybeTriggerBrowserbaseRefresh(
   return true;
 }
 
+async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquired: boolean; owner: string }> {
+  const started = Date.now();
+  const raw = await env.TDF_ALERTS.get(deltaLockKey);
+  if (raw) {
+    const lock = JSON.parse(raw) as { owner?: string; acquiredAt?: string };
+    const acquiredAt = lock.acquiredAt ? new Date(lock.acquiredAt).valueOf() : 0;
+    if (acquiredAt && Date.now() - acquiredAt < deltaLockTtlMs) {
+      addStep(run, "acquire-delta-lock", "skipped", {
+        durationMs: Date.now() - started,
+        owner: lock.owner,
+        acquiredAt: lock.acquiredAt,
+        ageMs: Date.now() - acquiredAt
+      });
+      return { acquired: false, owner: lock.owner ?? "unknown" };
+    }
+  }
+
+  await env.TDF_ALERTS.put(
+    deltaLockKey,
+    JSON.stringify({
+      owner: run.id,
+      acquiredAt: new Date().toISOString()
+    })
+  );
+  addStep(run, "acquire-delta-lock", "success", {
+    durationMs: Date.now() - started,
+    owner: run.id
+  });
+  return { acquired: true, owner: run.id };
+}
+
+async function releaseDeltaLock(env: Env, run: RunLog): Promise<void> {
+  const started = Date.now();
+  const store = env.TDF_ALERTS as KVNamespace & { delete?: (key: string) => Promise<void> };
+  if (store.delete) {
+    await store.delete(deltaLockKey);
+    addStep(run, "release-delta-lock", "success", { durationMs: Date.now() - started });
+  } else {
+    await env.TDF_ALERTS.put(
+      deltaLockKey,
+      JSON.stringify({
+        owner: "released",
+        acquiredAt: "1970-01-01T00:00:00.000Z"
+      })
+    );
+    addStep(run, "release-delta-lock", "success", {
+      durationMs: Date.now() - started,
+      fallback: "put-expired-lock"
+    });
+  }
+}
+
+async function checkStaleHealth(env: Env, run: RunLog): Promise<void> {
+  const logs = await readLogs(env);
+  const lastSuccess = [...logs]
+    .reverse()
+    .find((log) => log.event === "delta" && log.status === "success");
+  if (!lastSuccess) {
+    addStep(run, "stale-health-check", "skipped", { reason: "No previous successful delta run." });
+    return;
+  }
+
+  const ageMs = Date.now() - new Date(lastSuccess.finishedAt).valueOf();
+  if (ageMs < staleSuccessAlertAfterMs) {
+    addStep(run, "stale-health-check", "success", {
+      lastSuccessAt: lastSuccess.finishedAt,
+      ageMs
+    });
+    return;
+  }
+
+  const state = await readHealthState(env);
+  const lastNotifiedAt = state.lastStaleNotifiedAt
+    ? new Date(state.lastStaleNotifiedAt).valueOf()
+    : 0;
+  const shouldNotify = !lastNotifiedAt || Date.now() - lastNotifiedAt >= staleSuccessNotifyIntervalMs;
+  addStep(run, "stale-health-check", "failure", {
+    lastSuccessAt: lastSuccess.finishedAt,
+    ageMs,
+    shouldNotify,
+    lastStaleNotifiedAt: state.lastStaleNotifiedAt
+  });
+
+  if (!shouldNotify) {
+    return;
+  }
+
+  await sendMessage(
+    env,
+    `<b>TDF checker health warning</b>\nNo successful delta check since ${escapeHtml(lastSuccess.finishedAt)}. This run is trying now.`
+  );
+  await env.TDF_ALERTS.put(
+    healthStateKey,
+    JSON.stringify({
+      lastStaleNotifiedAt: new Date().toISOString()
+    } satisfies HealthState)
+  );
+  addStep(run, "send-stale-health-warning", "success");
+}
+
+async function readHealthState(env: Env): Promise<HealthState> {
+  const raw = await env.TDF_ALERTS.get(healthStateKey);
+  if (!raw) {
+    return { lastStaleNotifiedAt: null };
+  }
+  const parsed = JSON.parse(raw) as Partial<HealthState>;
+  return { lastStaleNotifiedAt: parsed.lastStaleNotifiedAt ?? null };
+}
+
+async function buildDebugSnapshot(env: Env): Promise<DebugSnapshot> {
+  const [logs, cookie, auth, health] = await Promise.all([
+    readLogs(env),
+    readCookieMeta(env),
+    readAuthState(env),
+    readHealthState(env)
+  ]);
+  const lastRun = logs.at(-1) ?? null;
+  const lastSuccess = [...logs].reverse().find((log) => log.status === "success") ?? null;
+  const lastFailure = [...logs].reverse().find((log) => log.status === "failure") ?? null;
+  return {
+    version: workerVersion,
+    generatedAt: new Date().toISOString(),
+    cookie,
+    auth,
+    health,
+    lastSuccess,
+    lastFailure,
+    lastRun,
+    recentRuns: logs.slice(-10).map((log) => ({
+      finishedAt: log.finishedAt,
+      event: log.event,
+      status: log.status,
+      trigger: log.trigger,
+      shows: log.shows,
+      performances: log.performances,
+      newPerformances: log.newPerformances,
+      failureKind: log.failureKind,
+      message: log.message
+    }))
+  };
+}
+
 async function readLogs(env: Env): Promise<RunLog[]> {
   const raw = await env.TDF_ALERTS.get(logsKey);
   if (!raw) {
@@ -734,6 +1032,7 @@ function createRun(event: RunLog["event"], trigger: string): RunLog {
     startedAt,
     finishedAt: startedAt,
     durationMs: 0,
+    version: workerVersion,
     steps: []
   };
 }
@@ -866,6 +1165,47 @@ function formatLogs(logs: RunLog[]): string {
         .join("\n")
     )
   ].join("\n\n");
+}
+
+function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {
+  const lastFailure = snapshot.lastFailure
+    ? `${snapshot.lastFailure.finishedAt} (${snapshot.lastFailure.failureKind ?? "unknown"})`
+    : "none";
+  return [
+    "<b>TDF Status</b>",
+    `Cookie works now. ${offers.length} shows, ${countPerformances(offers)} performances available.`,
+    `Cookie saved: ${snapshot.cookie.savedAt ?? "unknown"} (${snapshot.cookie.source ?? "unknown source"})`,
+    `Last success: ${snapshot.lastSuccess?.finishedAt ?? "none"}`,
+    `Last failure: ${escapeHtml(lastFailure)}`,
+    `Browserbase refresh attempted: ${snapshot.auth.lastRefreshAttemptedAt ?? "none"}`,
+    `Worker: ${escapeHtml(snapshot.version)}`
+  ].join("\n");
+}
+
+function formatDebug(snapshot: DebugSnapshot): string {
+  return [
+    "<b>TDF Debug</b>",
+    `generated=${escapeHtml(snapshot.generatedAt)}`,
+    `version=${escapeHtml(snapshot.version)}`,
+    "",
+    "<b>Cookie</b>",
+    `saved=${snapshot.cookie.savedAt ?? "unknown"}`,
+    `source=${snapshot.cookie.source ?? "unknown"}`,
+    `bytes=${snapshot.cookie.cookieBytes}`,
+    `hasSession=${snapshot.cookie.hasSessionCookie}`,
+    `hasTNEW=${snapshot.cookie.hasTnewCookie}`,
+    "",
+    "<b>Recovery</b>",
+    `lastFailure=${snapshot.auth.lastFailureKind ?? "none"}`,
+    `lastFailureAt=${snapshot.auth.lastFailureNotifiedAt ?? "none"}`,
+    `lastRefreshAttempt=${snapshot.auth.lastRefreshAttemptedAt ?? "none"}`,
+    "",
+    "<b>Recent</b>",
+    snapshot.recentRuns
+      .slice(-5)
+      .map((run) => `${run.finishedAt} ${run.event}/${run.status} shows=${run.shows ?? "-"} perf=${run.performances ?? "-"} new=${run.newPerformances ?? "-"}`)
+      .join("\n") || "No runs yet."
+  ].join("\n");
 }
 
 async function sendMessage(env: Env, text: string): Promise<void> {

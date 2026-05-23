@@ -199,6 +199,18 @@ async function uploadCookieToWorker(cookie: string, env: LoginEnv): Promise<void
   }
 
   console.log("Updated Cloudflare KV TDF_COOKIE through the Worker.");
+
+  const verifyResponse = await fetch(
+    `${env.workerBaseUrl.replace(/\/$/, "")}/verify-cookie?token=${encodeURIComponent(env.cookieFormToken)}`
+  );
+  if (!verifyResponse.ok) {
+    throw new Error(`Cloudflare saved the cookie, but final verification failed: ${verifyResponse.status} ${await verifyResponse.text()}`);
+  }
+  const verification = (await verifyResponse.json()) as { status?: string; shows?: number; performances?: number; message?: string };
+  if (verification.status !== "success") {
+    throw new Error(`Cloudflare final verification failed: ${JSON.stringify(verification)}`);
+  }
+  console.log(`Cloudflare final verification passed: ${verification.shows} shows, ${verification.performances} performances.`);
 }
 
 main().catch((error) => {

@@ -23,11 +23,12 @@ This project solves that by treating authentication as part of the product, not 
 - Checks TDF every 10 minutes from Cloudflare.
 - Sends Telegram alerts only for newly seen performances.
 - Sends a daily 9am New York digest of all current offers.
-- Lets you ask the bot for `/offers`, `/status`, `/logs`, and `/cookie`.
+- Lets you ask the bot for `/offers`, `/status`, `/debug`, `/logs`, and `/cookie`.
 - Touches the authenticated TDF page before fetching JSON, so TDF sees real session activity.
 - Captures and persists refreshed `Set-Cookie` values back into Cloudflare KV.
 - Automatically tries a Browserbase refresh once when auth fails.
 - Throttles refresh attempts and failure alerts so it does not burn browser minutes or spam Telegram.
+- Uses the delta check itself as the keepalive path, with duplicate cron protection and stale-success health warnings.
 - Stores structured logs for every meaningful decision.
 
 ## Why The Design Is Smart
@@ -43,6 +44,7 @@ The system deliberately separates the common path from the recovery path.
 | Cookie refresh | Merge `Set-Cookie` back into KV | Keeps server/browser session metadata fresh when TDF rotates it |
 | Browser automation | Browserbase only after auth failure | Avoids paying for browser minutes on every check |
 | Recovery automation | GitHub refresh workflow dispatched by Worker | Cloudflare cannot run Chromium; GitHub can run the Browserbase script |
+| Run safety | Best-effort cron lock | Prevents overlapping scheduled checks from duplicating work or messages |
 | Safety | Captcha-resilient, not captcha-bypassing | Stops and alerts when human verification is required |
 | Debuggability | Structured logs for every run | Future failures become inspectable instead of mysterious |
 
@@ -51,7 +53,7 @@ The system deliberately separates the common path from the recovery path.
 ```mermaid
 flowchart LR
   C[Cloudflare Cron<br/>Every 10 min] --> W[Cloudflare Worker]
-  T[Telegram Commands<br/>/offers /status /logs /cookie] --> W
+  T[Telegram Commands<br/>/offers /status /debug /logs /cookie] --> W
   W --> KV[(Cloudflare KV<br/>cookie, seen ids, auth state, logs)]
   W --> P[TDF Main Offers Page<br/>session touch + Set-Cookie]
   P --> J[TDF Performances JSON]
@@ -75,6 +77,8 @@ flowchart LR
 7. It sends one Telegram summary and one timestamped details file only when something new appears.
 8. It writes a structured log entry to `RUN_LOGS`.
 
+That normal delta run is also the keepalive. There is no separate artificial pinger: every scheduled check performs a useful authenticated page touch, captures refreshed cookies, and then fetches data.
+
 ## The Recovery Path
 
 When the cookie fails:
@@ -96,7 +100,8 @@ Telegram is the interface:
 | Command | Result |
 |---|---|
 | `/offers` | Current TDF offers summary plus timestamped details file |
-| `/status` | Confirms whether the saved cookie can access TDF |
+| `/status` | Confirms whether the saved cookie can access TDF and shows recent recovery state |
+| `/debug` | Compact diagnostic snapshot: worker version, cookie metadata, recovery state, recent runs |
 | `/logs` | Recent run summaries directly in Telegram |
 | `/cookie` | Private Cloudflare form URL for manually saving a fresh cookie |
 
@@ -106,6 +111,8 @@ Private HTTP endpoints are also available with `COOKIE_FORM_TOKEN`:
 |---|---|
 | `/run-delta?token=...` | Run the delta checker now |
 | `/run-daily?token=...` | Send the current digest now |
+| `/verify-cookie?token=...` | Validate the saved cookie end to end without sending Telegram |
+| `/debug?token=...` | Inspect cookie metadata, auth state, health state, and recent runs |
 | `/logs?token=...` | Inspect full structured logs as JSON |
 | `/cookie?token=...` | Paste and validate a fresh cookie |
 
@@ -114,7 +121,11 @@ Private HTTP endpoints are also available with `COOKIE_FORM_TOKEN`:
 Every run records enough detail to answer “where did it fail?” later:
 
 - run id, event, trigger, start/end time, duration
+- deployed worker version
+- cron lock acquisition/release or skipped duplicate run
+- stale-success health checks and throttled warnings
 - cookie byte length and whether expected session cookies exist
+- cookie save timestamp and source when the cookie is updated
 - main-page status, final URL, content type, authenticated page signals
 - `Set-Cookie` count and cookie names refreshed by TDF
 - JSON endpoint status, content type, body size, offer counts
@@ -278,6 +289,10 @@ The test suite covers:
 - Worker happy path with main-page cookie refresh merge
 - auth failure dispatching one Browserbase refresh
 - repeated auth failure being throttled
+- final cookie verification endpoint with no Telegram side effects
+- debug snapshot endpoint
+- scheduled cron lock skip
+- stale-success health warning path
 
 ## Security Notes
 
@@ -305,5 +320,6 @@ The deployed Worker has been end-to-end tested:
 - Refreshed cookies are merged and persisted.
 - TDF JSON fetch returns current offers.
 - Telegram commands work.
+- `/debug` and `/verify-cookie` are deployed.
 - Automatic Browserbase refresh workflow succeeds.
 - A deliberately broken cookie triggered auth detection, refresh dispatch, Browserbase login, KV update, and restored normal checks after KV propagation.
