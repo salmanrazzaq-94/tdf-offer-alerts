@@ -1,4 +1,4 @@
-import type { AlertItem } from "./tdf.js";
+import type { AlertItem, TdfOffer } from "./tdf.js";
 
 export type TelegramConfig = {
   botToken: string;
@@ -30,18 +30,76 @@ export async function sendTelegramMessage(
   }
 }
 
-export function formatAlertMessage(item: AlertItem): string {
-  const date = formatPerformanceDate(item.performanceDate);
-  const tags = [...item.promotions, ...item.categories].filter(Boolean);
-  const tagsLine = tags.length > 0 ? `\n${escapeHtml(tags.join(" | "))}` : "";
+export async function sendTelegramDocument(
+  config: TelegramConfig,
+  filename: string,
+  content: string,
+  caption: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<void> {
+  const formData = new FormData();
+  formData.set("chat_id", config.chatId);
+  formData.set("caption", caption);
+  formData.set("parse_mode", "HTML");
+  formData.set("document", new Blob([content], { type: "text/plain" }), filename);
+
+  const response = await fetchImpl(
+    `https://api.telegram.org/bot${config.botToken}/sendDocument`,
+    {
+      method: "POST",
+      body: formData
+    }
+  );
+
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`Telegram document send failed with ${response.status}: ${body}`);
+  }
+}
+
+export function formatDigestSummary(offers: TdfOffer[], newItems: AlertItem[]): string {
+  const productionCount = offers.length;
+  const performanceCount = offers.reduce((total, offer) => total + offer.performances.length, 0);
+  const summary = offers
+    .map((offer) => `${offer.title} (${offer.performances.length})`)
+    .join(" | ");
 
   return [
-    "<b>New TDF offer</b>",
-    `<b>${escapeHtml(item.title)}</b>`,
-    `${escapeHtml(item.facility)} - ${escapeHtml(date)}`,
-    `Performance ID: ${item.performanceId}${tagsLine}`,
-    item.thumbnail
+    `<b>TDF Offers Update</b>`,
+    `${newItems.length} new performances. ${productionCount} shows, ${performanceCount} performances available.`,
+    "",
+    `<b>Available shows</b>`,
+    escapeHtml(summary)
   ].join("\n");
+}
+
+export function formatOfferDetailsFile(offers: TdfOffer[], newItems: AlertItem[]): string {
+  const lines = [
+    "TDF Offers Detail",
+    `${newItems.length} new performances`,
+    `${offers.length} shows available`,
+    "",
+    "Shows",
+    ...offers.map((offer) => `- ${offer.title} (${offer.performances.length})`),
+    "",
+    "Details"
+  ];
+  for (const offer of offers) {
+    const keywords = offer.keywords.map((keyword) => keyword.keywordName).join(" | ");
+    lines.push("");
+    lines.push(offer.title);
+    lines.push(offer.facility);
+    if (keywords) {
+      lines.push(keywords);
+    }
+    for (const performance of offer.performances) {
+      const id = `${offer.productionSeasonId}:${performance.performanceId}`;
+      const marker = newItems.some((item) => item.id === id) ? "NEW " : "";
+      lines.push(`- ${marker}${formatPerformanceDate(performance.performanceDate)} | performanceId ${performance.performanceId}`);
+    }
+  }
+
+  return lines.join("\n");
 }
 
 export function formatAuthFailureMessage(reason: string): string {

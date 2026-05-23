@@ -8,8 +8,10 @@ import {
 } from "./tdf.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import {
-  formatAlertMessage,
   formatAuthFailureMessage,
+  formatDigestSummary,
+  formatOfferDetailsFile,
+  sendTelegramDocument,
   sendTelegramMessage
 } from "./telegram.js";
 
@@ -27,13 +29,14 @@ async function main(): Promise<void> {
       return;
     }
 
-    console.log(`Fetched ${alertItems.length} TDF performances. Sending ${newAlerts.length} alerts.`);
-    for (const item of newAlerts) {
-      await sendTelegramMessage(
-        { botToken: env.telegramBotToken, chatId: env.telegramChatId },
-        formatAlertMessage(item)
-      );
-    }
+    const telegram = { botToken: env.telegramBotToken, chatId: env.telegramChatId };
+    const summary = formatDigestSummary(offers, newAlerts);
+    const details = formatOfferDetailsFile(offers, newAlerts);
+    console.log(
+      `Fetched ${alertItems.length} TDF performances. Sending one summary and one details file for ${newAlerts.length} new performances.`
+    );
+    await sendTelegramMessage(telegram, summary);
+    await sendTelegramDocument(telegram, "tdf-offers.txt", details, "Full TDF availability details");
 
     await writeSeenState(env.seenStatePath, markSeen(previousState, newAlerts));
   } catch (error) {

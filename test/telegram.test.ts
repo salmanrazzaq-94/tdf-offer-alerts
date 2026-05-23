@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatAlertMessage, formatAuthFailureMessage } from "../src/telegram.js";
+import {
+  formatAuthFailureMessage,
+  formatDigestSummary,
+  formatOfferDetailsFile
+} from "../src/telegram.js";
 import type { AlertItem } from "../src/tdf.js";
 
 const item: AlertItem = {
@@ -15,15 +19,53 @@ const item: AlertItem = {
   promotions: ["Passport Ticket Offers"]
 };
 
-test("formats a Telegram alert message", () => {
-  const message = formatAlertMessage(item);
+const offer = {
+  productionSeasonId: 230117,
+  title: "Passport: Dog Day Afternoon - $20 Seats",
+  facility: "August Wilson Theatre",
+  thumbnail: "https://media.tdf.org/images/TNEW/dog day.jpg",
+  isTAP: false,
+  isNew: true,
+  keywords: [
+    {
+      categoryId: 6,
+      categoryName: "Venue",
+      keywordId: 15,
+      keywordName: "Broadway"
+    }
+  ],
+  promotions: [
+    {
+      categoryId: 14,
+      categoryName: "Promotion",
+      keywordId: 71,
+      keywordName: "Passport Ticket Offers"
+    }
+  ],
+  performances: [
+    {
+      performanceId: 242526,
+      performanceDate: "2026-05-26T19:00:00-04:00"
+    }
+  ]
+};
 
-  assert.match(message, /<b>New TDF offer<\/b>/);
+test("formats a Telegram digest summary", () => {
+  const message = formatDigestSummary([offer], [item]);
+
+  assert.match(message, /<b>TDF Offers Update<\/b>/);
+  assert.match(message, /1 new performances\. 1 shows, 1 performances available\./);
+  assert.match(message, /<b>Available shows<\/b>/);
+  assert.match(message, /Passport: Dog Day Afternoon - \$20 Seats/);
+});
+
+test("formats an attached offer details file", () => {
+  const message = formatOfferDetailsFile([offer], [item]);
+
+  assert.match(message, /TDF Offers Detail/);
   assert.match(message, /Passport: Dog Day Afternoon - \$20 Seats/);
   assert.match(message, /August Wilson Theatre/);
-  assert.match(message, /Performance ID: 242526/);
-  assert.match(message, /Passport Ticket Offers \| Broadway \| Play\/Drama/);
-  assert.match(message, /https:\/\/media\.tdf\.org/);
+  assert.match(message, /- NEW May 26, 2026, 7:00 PM \| performanceId 242526/);
 });
 
 test("escapes auth failure text", () => {
