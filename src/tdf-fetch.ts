@@ -1,6 +1,24 @@
 import { parseTdfOffers, TDF_OFFERS_URL, TDF_PERFORMANCES_URL, type TdfOffer } from "./tdf.js";
 
 export async function fetchTdfOffersWithCookie(cookie: string): Promise<TdfOffer[]> {
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await fetchTdfOffersOnce(cookie);
+    } catch (error) {
+      lastError = error;
+      if (attempt < 3 && isRetryableTdfError(error)) {
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2_000));
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  throw lastError;
+}
+
+async function fetchTdfOffersOnce(cookie: string): Promise<TdfOffer[]> {
   const response = await fetch(TDF_PERFORMANCES_URL, {
     headers: {
       Accept: "application/json, text/javascript, */*; q=0.01",
@@ -30,4 +48,12 @@ export async function fetchTdfOffersWithCookie(cookie: string): Promise<TdfOffer
 
   const parsed = JSON.parse(body) as unknown;
   return parseTdfOffers(parsed);
+}
+
+function isRetryableTdfError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /returned 5\d\d/.test(error.message) || /timeout|fetch failed/i.test(error.message);
 }
