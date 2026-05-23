@@ -1,5 +1,6 @@
 import { readEnv } from "./env.js";
 import { readJsonFile, writeJsonFile } from "./json-file.js";
+import { appendRunLog } from "./run-log.js";
 import {
   findNewAlerts,
   flattenOffers,
@@ -41,6 +42,14 @@ async function main(): Promise<void> {
 
     if (newAlerts.length === 0) {
       console.log(`Fetched ${alertItems.length} TDF performances. No new offers.`);
+      await appendRunLog({
+        event: "delta-check",
+        status: "success",
+        shows: offers.length,
+        performances: alertItems.length,
+        newPerformances: 0,
+        notificationSent: false
+      });
       return;
     }
 
@@ -59,6 +68,14 @@ async function main(): Promise<void> {
     );
 
     await writeSeenState(env.seenStatePath, markSeen(previousState, newAlerts));
+    await appendRunLog({
+      event: "delta-check",
+      status: "success",
+      shows: offers.length,
+      performances: alertItems.length,
+      newPerformances: newAlerts.length,
+      notificationSent: true
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await notifyAuthFailure(reason);
@@ -81,6 +98,12 @@ async function notifyAuthFailure(reason: string): Promise<void> {
   await writeJsonFile<AuthState>(authStatePath, {
     lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
     lastFailureReason: reason
+  });
+  await appendRunLog({
+    event: "delta-check",
+    status: "failure",
+    message: reason,
+    notificationSent: shouldNotify
   });
 
   if (!shouldNotify) {

@@ -1,6 +1,7 @@
 import { readEnv } from "./env.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers } from "./tdf.js";
+import { appendRunLog } from "./run-log.js";
 import {
   formatDigestSummary,
   formatOfferDetailsFile,
@@ -24,9 +25,23 @@ async function main(): Promise<void> {
   );
 
   console.log(`Sent current digest for ${offers.length} shows and ${items.length} performances.`);
+  await appendRunLog({
+    event: "daily-current",
+    status: "success",
+    shows: offers.length,
+    performances: items.length,
+    notificationSent: true
+  });
 }
 
 main().catch((error) => {
   console.error(error);
+  const reason = error instanceof Error ? error.message : String(error);
+  void appendRunLog({
+    event: "daily-current",
+    status: "failure",
+    message: reason,
+    notificationSent: false
+  });
   process.exitCode = 1;
 });

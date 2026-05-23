@@ -38,11 +38,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
 
       - name: Commit telegram command state
+        if: always()
         run: |
-          if [[ -n "$(git status --porcelain data/telegram-state.json)" ]]; then
+          if [[ -n "$(git status --porcelain data/telegram-state.json data/run-log.jsonl)" ]]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add data/telegram-state.json
+            git add data/telegram-state.json data/run-log.jsonl
             git commit -m "Update Telegram command state"
             git push
           else

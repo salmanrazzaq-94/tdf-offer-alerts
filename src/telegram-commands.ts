@@ -2,6 +2,7 @@ import { readEnv } from "./env.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers } from "./tdf.js";
 import { readJsonFile, writeJsonFile } from "./json-file.js";
+import { appendRunLog } from "./run-log.js";
 import {
   formatAuthFailureMessage,
   formatDigestSummary,
@@ -38,6 +39,7 @@ async function main(): Promise<void> {
   const state = await readJsonFile<TelegramState>(statePath, { lastUpdateId: 0 });
   const updates = await getUpdates(env.telegramBotToken, state.lastUpdateId + 1);
   let lastUpdateId = state.lastUpdateId;
+  let commandsAnswered = 0;
 
   for (const update of updates) {
     lastUpdateId = Math.max(lastUpdateId, update.update_id);
@@ -49,17 +51,26 @@ async function main(): Promise<void> {
 
     if (text === "/offers" || text === "/offers@tdf_alert_watcher_bot" || text === "offers") {
       await sendCurrentOffers(env, telegram);
+      commandsAnswered += 1;
       continue;
     }
 
     if (text === "/help" || text === "/start") {
       await sendTelegramMessage(telegram, "Send /offers to get the latest TDF availability.");
+      commandsAnswered += 1;
     }
   }
 
   if (lastUpdateId !== state.lastUpdateId) {
     await writeJsonFile<TelegramState>(statePath, { lastUpdateId });
   }
+  await appendRunLog({
+    event: "telegram-commands",
+    status: "success",
+    updatesSeen: updates.length,
+    message: `Answered ${commandsAnswered} command(s).`,
+    notificationSent: commandsAnswered > 0
+  });
 }
 
 async function sendCurrentOffers(
@@ -77,9 +88,24 @@ async function sendCurrentOffers(
       "Latest TDF availability details"
     );
     console.log(`Answered /offers with ${offers.length} shows and ${items.length} performances.`);
+    await appendRunLog({
+      event: "telegram-command-offers",
+      status: "success",
+      command: "/offers",
+      shows: offers.length,
+      performances: items.length,
+      notificationSent: true
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     await sendTelegramMessage(telegram, formatAuthFailureMessage(reason));
+    await appendRunLog({
+      event: "telegram-command-offers",
+      status: "failure",
+      command: "/offers",
+      message: reason,
+      notificationSent: true
+    });
     throw error;
   }
 }
