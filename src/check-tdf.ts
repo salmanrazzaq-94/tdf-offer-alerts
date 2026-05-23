@@ -8,11 +8,12 @@ import {
   readSeenState,
   writeSeenState
 } from "./tdf.js";
-import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
+import { fetchTdfOffersWithCookie, TdfFetchError, type TdfFetchErrorKind } from "./tdf-fetch.js";
 import {
   formatAuthFailureMessage,
   formatDigestSummary,
   formatOfferDetailsFile,
+  formatTransientFailureMessage,
   sendTelegramDocument,
   sendTelegramMessage,
   timestampedDetailsFilename
@@ -21,6 +22,7 @@ import {
 type AuthState = {
   lastFailureNotifiedAt: string | null;
   lastFailureReason: string | null;
+  lastFailureKind?: string | null;
 };
 
 const authStatePath = "data/auth-state.json";
@@ -33,7 +35,8 @@ async function main(): Promise<void> {
     const offers = await fetchTdfOffersWithCookie(env.tdfCookie);
     await writeJsonFile<AuthState>(authStatePath, {
       lastFailureNotifiedAt: null,
-      lastFailureReason: null
+      lastFailureReason: null,
+      lastFailureKind: null
     });
 
     const alertItems = flattenOffers(offers);
@@ -78,47 +81,65 @@ async function main(): Promise<void> {
     });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    await notifyAuthFailure(reason);
+    await notifyFailure(reason, classifyFailure(error));
     throw error;
   }
 }
 
-async function notifyAuthFailure(reason: string): Promise<void> {
+async function notifyFailure(reason: string, kind: TdfFetchErrorKind): Promise<void> {
   const env = readEnv();
   const state = await readJsonFile<AuthState>(authStatePath, {
     lastFailureNotifiedAt: null,
-    lastFailureReason: null
+    lastFailureReason: null,
+    lastFailureKind: null
   });
   const lastNotifiedAt = state.lastFailureNotifiedAt
     ? new Date(state.lastFailureNotifiedAt).valueOf()
     : 0;
   const shouldNotify =
+    state.lastFailureKind !== kind ||
     !lastNotifiedAt || Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs;
 
   await writeJsonFile<AuthState>(authStatePath, {
     lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
-    lastFailureReason: reason
+    lastFailureReason: reason,
+    lastFailureKind: kind
   });
   await appendRunLog({
     event: "delta-check",
     status: "failure",
+    failureKind: kind,
     message: reason,
     notificationSent: shouldNotify
   });
 
   if (!shouldNotify) {
-    console.log("Skipping repeated auth failure Telegram notification.");
+    console.log("Skipping repeated TDF failure Telegram notification.");
     return;
   }
 
   try {
     await sendTelegramMessage(
       { botToken: env.telegramBotToken, chatId: env.telegramChatId },
-      formatAuthFailureMessage(reason)
+      kind === "transient"
+        ? formatTransientFailureMessage(reason)
+        : formatAuthFailureMessage(reason)
     );
   } catch (telegramError) {
     console.error("Could not send Telegram failure notice:", telegramError);
   }
+}
+
+function classifyFailure(error: unknown): TdfFetchErrorKind {
+  if (error instanceof TdfFetchError) {
+    return error.kind;
+  }
+
+  if (error instanceof Error && /timeout|fetch failed/i.test(error.message)) {
+    return "transient";
+  }
+
+  return "unexpected";
 }
 
 main().catch((error) => {

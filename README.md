@@ -8,7 +8,8 @@ Public-repo friendly GitHub Action that checks TDF offers every 10 minutes and s
 - Authentication comes from a `TDF_COOKIE` GitHub Actions secret.
 - New performances are detected by `productionSeasonId:performanceId`.
 - Seen performances are stored in `data/seen-offers.json` and committed back to the repo.
-- Telegram receives one alert per newly seen performance.
+- Telegram receives one summary message plus one timestamped details file when new performances appear.
+- Each scheduled run appends a JSON line to `data/run-log.jsonl` so recent success/failure history can be inspected later.
 
 The scheduled workflow does not launch Playwright, which keeps the normal every-10-minute run as cheap as possible. Playwright is only a local helper for refreshing cookies when the TDF session expires.
 
@@ -117,8 +118,36 @@ Removed performances do not trigger alerts.
 
 The daily current workflow runs at 9am America/New_York and sends the current availability digest plus an attached details file. It does not update `data/seen-offers.json`.
 
+## Telegram Commands
+
+The Cloudflare Worker handles Telegram commands through a webhook:
+
+- `/offers` sends the latest current offers summary and details file.
+- `/status` tests whether the saved TDF cookie still works.
+- `/cookie` returns a private form link where you can paste and test a fresh cookie.
+
+The old GitHub Actions polling workflow for Telegram commands is intentionally removed because Telegram does not allow `getUpdates` polling while a webhook is active.
+
+## Run Logs
+
+Recent local and GitHub Action results are stored in `data/run-log.jsonl`.
+
+Useful checks:
+
+```sh
+tail -n 20 data/run-log.jsonl
+gh run list --limit 20
+gh run view <run-id> --log-failed
+```
+
+Failure entries include `failureKind` when the checker can classify the problem:
+
+- `auth`: TDF redirected to login or showed a login/challenge page. Refresh the cookie.
+- `transient`: TDF or the runner returned a retryable server/network error. The next run will try again.
+- `unexpected`: something else changed and needs inspection.
+
 ## Cookie Expiration
 
-If TDF returns a login page, captcha page, or non-JSON response, the workflow sends a Telegram message telling you to refresh `TDF_COOKIE`.
+If TDF returns a login page, captcha page, or non-JSON response, the workflow sends a Telegram message telling you to refresh the saved cookie.
 
-This project does not bypass captchas. When TDF requires a human challenge, refresh the cookie manually and update the secret.
+This project does not bypass captchas. When TDF requires a human challenge, refresh the cookie manually, then update it with `/cookie` and in the `TDF_COOKIE` GitHub Actions secret if the scheduled workflows still use that secret.

@@ -5,6 +5,7 @@ const runLogPath = "data/run-log.jsonl";
 export type RunLogEntry = {
   event: string;
   status: "success" | "failure" | "skipped";
+  failureKind?: string;
   message?: string;
   shows?: number;
   performances?: number;

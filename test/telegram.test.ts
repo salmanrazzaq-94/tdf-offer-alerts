@@ -4,6 +4,7 @@ import {
   formatAuthFailureMessage,
   formatDigestSummary,
   formatOfferDetailsFile,
+  formatTransientFailureMessage,
   timestampedDetailsFilename
 } from "../src/telegram.js";
 import type { AlertItem } from "../src/tdf.js";
@@ -84,6 +85,14 @@ test("escapes auth failure text", () => {
 
   assert.match(message, /TDF login needs attention/);
   assert.match(message, /Returned &lt;html&gt; &amp; login page/);
+  assert.match(message, /Send \/cookie/);
+});
+
+test("formats transient failure text", () => {
+  const message = formatTransientFailureMessage("TDF performances endpoint returned 500: ");
+
+  assert.match(message, /TDF checker temporary failure/);
+  assert.match(message, /next scheduled run will try again/);
 });
 
 test("formats timestamped details filenames", () => {

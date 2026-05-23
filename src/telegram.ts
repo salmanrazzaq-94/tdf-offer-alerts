@@ -117,7 +117,15 @@ export function formatAuthFailureMessage(reason: string): string {
     "<b>TDF login needs attention</b>",
     "The scheduled checker could not access the authenticated TDF offers endpoint.",
     escapeHtml(reason),
-    "Refresh the Browserbase persistent context by logging in manually, then rerun the workflow."
+    "Send /cookie to the Telegram bot and paste a fresh TDF cookie, then rerun the workflow."
+  ].join("\n");
+}
+
+export function formatTransientFailureMessage(reason: string): string {
+  return [
+    "<b>TDF checker temporary failure</b>",
+    "TDF or the GitHub runner returned a retryable error. The next scheduled run will try again.",
+    escapeHtml(reason)
   ].join("\n");
 }
 
