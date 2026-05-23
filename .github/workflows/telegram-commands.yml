@@ -45,7 +45,7 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add data/telegram-state.json data/run-log.jsonl
             git commit -m "Update Telegram command state"
-            git push
+            git push "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:${GITHUB_REF_NAME}
           else
             echo "No telegram command state changes to commit."
           fi
