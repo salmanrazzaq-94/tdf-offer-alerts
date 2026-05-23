@@ -106,12 +106,16 @@ Manual browser method:
 
 ## GitHub Action
 
-The workflow runs:
+The delta workflow runs:
 
 - every 10 minutes
 - manually with `workflow_dispatch`
 
-It typechecks, runs unit tests, checks TDF, sends Telegram alerts, and commits `data/seen-offers.json` if new performances were found.
+It typechecks, runs unit tests, checks TDF, sends Telegram alerts only for newly seen `productionSeasonId:performanceId` combinations, and commits `data/seen-offers.json` if new performances were found.
+
+Removed performances do not trigger alerts.
+
+The daily current workflow runs at 9am America/New_York and sends the current availability digest plus an attached details file. It does not update `data/seen-offers.json`.
 
 ## Cookie Expiration
 

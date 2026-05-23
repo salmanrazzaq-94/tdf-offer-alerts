@@ -1,0 +1,64 @@
+name: Daily Current TDF Offers
+
+on:
+  schedule:
+    # Run at both possible UTC hours for 9am America/New_York.
+    # The guard step below sends only when the New York hour is actually 09.
+    - cron: "0 13 * * *"
+    - cron: "0 14 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tdf-daily-current
+  cancel-in-progress: false
+
+jobs:
+  send-current:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check 9am New York guard
+        id: time_guard
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ "$(TZ=America/New_York date +%H)" == "09" ]]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Node
+        if: steps.time_guard.outputs.should_run == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        if: steps.time_guard.outputs.should_run == 'true'
+        run: npm ci
+
+      - name: Type check
+        if: steps.time_guard.outputs.should_run == 'true'
+        run: npm run check
+
+      - name: Run tests
+        if: steps.time_guard.outputs.should_run == 'true'
+        run: npm test
+
+      - name: Send current TDF offers digest
+        if: steps.time_guard.outputs.should_run == 'true'
+        run: npm run build && npm run send-current
+        env:
+          TDF_COOKIE: ${{ secrets.TDF_COOKIE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
