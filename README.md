@@ -21,26 +21,7 @@ This project does not bypass captchas. If TDF asks for a new human challenge or 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 
-Do not commit TDF credentials, cookies, storage state, or exported browser sessions. Rotate any password that was shared outside a password manager before using this automation.
-
-## Fresh laptop setup
-
-Install Apple Command Line Tools so `git` works:
-
-```sh
-xcode-select --install
-```
-
-Create a private GitHub repo named `tdf-offer-alerts` under your personal account, then push this directory after `git` is available:
-
-```sh
-git init
-git branch -M main
-git add .
-git commit -m "Initial TDF offer alerts action"
-git remote add origin git@github.com:<your-personal-username>/tdf-offer-alerts.git
-git push -u origin main
-```
+Do not commit TDF credentials, cookies, storage state, or exported browser sessions.
 
 ## Telegram setup
 
