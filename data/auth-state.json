@@ -1,4 +1,4 @@
 {
-  "lastFailureNotifiedAt": null,
-  "lastFailureReason": null
+  "lastFailureNotifiedAt": "2026-05-23T16:44:14.327Z",
+  "lastFailureReason": "TDF performances endpoint returned 500: "
 }
