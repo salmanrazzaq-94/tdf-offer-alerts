@@ -1,0 +1,25 @@
+{
+  "name": "tdf-offer-alerts",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "GitHub Action that checks TDF offers and sends Telegram alerts for newly seen performances.",
+  "scripts": {
+    "build": "tsc --noEmit false",
+    "check": "tsc --noEmit",
+    "test": "tsc --noEmit false && node --test dist/test/*.test.js",
+    "start": "node dist/src/check-tdf.js",
+    "refresh-session": "tsc --noEmit false && node dist/src/refresh-session.js"
+  },
+  "dependencies": {
+    "@browserbasehq/sdk": "^2.12.0",
+    "playwright-core": "^1.60.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
