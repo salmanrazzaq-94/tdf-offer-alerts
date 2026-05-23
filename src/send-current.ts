@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   await sendTelegramDocument(
     telegram,
     timestampedDetailsFilename("tdf-offers-current"),
-    formatOfferDetailsFile(offers, items),
+    formatOfferDetailsFile(offers, []),
     "Current TDF availability details"
   );
 

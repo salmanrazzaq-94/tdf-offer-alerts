@@ -85,10 +85,8 @@ export function formatOfferDetailsFile(offers: TdfOffer[], newItems: AlertItem[]
   ];
   for (const offer of offers) {
     lines.push("");
-    lines.push("=".repeat(72));
     lines.push(offer.title);
     lines.push(offer.facility);
-    lines.push("-".repeat(72));
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
       const marker = newItems.some((item) => item.id === id) ? "NEW " : "";

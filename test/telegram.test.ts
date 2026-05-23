@@ -68,6 +68,15 @@ test("formats an attached offer details file", () => {
   assert.match(message, /August Wilson Theatre/);
   assert.match(message, /NEW Tue, May 26, 7:00 PM/);
   assert.doesNotMatch(message, /performanceId/);
+  assert.doesNotMatch(message, /={10,}/);
+  assert.doesNotMatch(message, /-{10,}/);
+});
+
+test("formats current details without new markers", () => {
+  const message = formatOfferDetailsFile([offer], []);
+
+  assert.match(message, /Tue, May 26, 7:00 PM/);
+  assert.doesNotMatch(message, /NEW/);
 });
 
 test("escapes auth failure text", () => {
