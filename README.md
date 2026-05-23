@@ -33,11 +33,11 @@ Do not commit TDF credentials, cookies, storage state, or exported browser sessi
 
 ## Browserbase session setup
 
-1. Create a Browserbase API key and persistent context.
+1. Create a Browserbase API key.
 2. Add the Browserbase and Telegram environment variables locally in `.env`.
-3. Run `npm run refresh-session:local`.
-4. Open the printed Browserbase debugger URL and log in to TDF manually.
-5. Save the context id as `BROWSERBASE_CONTEXT_ID`.
+3. If you do not have a context id, run `npm run create-context:local` and save the printed id as `BROWSERBASE_CONTEXT_ID`.
+4. Run `npm run refresh-session:local`.
+5. Open the printed Browserbase debugger URL and log in to TDF manually.
 6. Run the GitHub Action manually with `workflow_dispatch`.
 
 If the Action reports that login needs attention, refresh the Browserbase context by logging in manually again.
@@ -64,6 +64,7 @@ Then run:
 
 ```sh
 npm test
+npm run create-context:local
 npm run refresh-session:local
 npm run start:local
 ```

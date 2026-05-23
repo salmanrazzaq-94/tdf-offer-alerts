@@ -72,11 +72,11 @@ async function createBrowserbaseSession(env: ReturnType<typeof readEnv>): Promis
   });
 
   const sessionOptions: Record<string, unknown> = {
-    context: {
-      id: env.browserbaseContextId,
-      persist: true
-    },
     browserSettings: {
+      context: {
+        id: env.browserbaseContextId,
+        persist: true
+      },
       viewport: {
         width: 1440,
         height: 1000

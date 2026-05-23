@@ -10,6 +10,7 @@
     "test": "tsc --noEmit false && node --test dist/test/*.test.js",
     "start": "node dist/src/check-tdf.js",
     "start:local": "tsc --noEmit false && node --env-file=.env dist/src/check-tdf.js",
+    "create-context:local": "tsc --noEmit false && node --env-file=.env dist/src/create-context.js",
     "refresh-session": "tsc --noEmit false && node dist/src/refresh-session.js",
     "refresh-session:local": "tsc --noEmit false && node --env-file=.env dist/src/refresh-session.js"
   },

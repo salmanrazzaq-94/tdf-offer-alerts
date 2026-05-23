@@ -1,6 +1,6 @@
 import Browserbase from "@browserbasehq/sdk";
 import { chromium } from "playwright-core";
-import { readEnv } from "./env.js";
+import { readBrowserbaseEnv } from "./env.js";
 
 const TDF_LOGIN_URL = "https://my.tdf.org/account/login";
 const HOLD_MS = Number(process.env.SESSION_HOLD_SECONDS ?? 600) * 1000;
@@ -12,14 +12,14 @@ type BrowserbaseSession = {
 };
 
 async function main(): Promise<void> {
-  const env = readEnv();
+  const env = readBrowserbaseEnv();
   const bb = new Browserbase({ apiKey: env.browserbaseApiKey });
   const sessionOptions: Record<string, unknown> = {
-    context: {
-      id: env.browserbaseContextId,
-      persist: true
-    },
     browserSettings: {
+      context: {
+        id: env.browserbaseContextId,
+        persist: true
+      },
       viewport: {
         width: 1440,
         height: 1000
