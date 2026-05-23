@@ -3,6 +3,9 @@ type Env = {
   TELEGRAM_BOT_TOKEN: string;
   TELEGRAM_CHAT_ID: string;
   COOKIE_FORM_TOKEN: string;
+  GITHUB_REFRESH_TOKEN?: string;
+  GITHUB_REPOSITORY?: string;
+  GITHUB_REFRESH_REF?: string;
 };
 
 type TelegramUpdate = {
@@ -68,6 +71,7 @@ type AuthState = {
   lastFailureNotifiedAt: string | null;
   lastFailureKind: string | null;
   lastFailureReason: string | null;
+  lastRefreshAttemptedAt: string | null;
 };
 
 const cookieKey = "TDF_COOKIE";
@@ -77,6 +81,7 @@ const authStateKey = "AUTH_STATE";
 const tdfOffersUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
 const tdfPerformancesUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
 const authFailureNotifyIntervalMs = 12 * 60 * 60 * 1000;
+const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
 const maxLogs = 200;
 
 export default {
@@ -375,7 +380,8 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
     JSON.stringify({
       lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
       lastFailureKind: kind,
-      lastFailureReason: message
+      lastFailureReason: message,
+      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
     })
   );
   addStep(run, "failure-notification-throttle", "success", {
@@ -399,10 +405,12 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
     });
   }
 
+  const refreshTriggered = await maybeTriggerBrowserbaseRefresh(env, run, state, kind, message);
+
   finishRun(run, "failure", {
     failureKind: kind,
     message,
-    notificationSent: shouldNotify
+    notificationSent: shouldNotify || refreshTriggered
   });
 }
 
@@ -582,10 +590,17 @@ async function readAuthState(env: Env): Promise<AuthState> {
     return {
       lastFailureNotifiedAt: null,
       lastFailureKind: null,
-      lastFailureReason: null
+      lastFailureReason: null,
+      lastRefreshAttemptedAt: null
     };
   }
-  return JSON.parse(raw) as AuthState;
+  const parsed = JSON.parse(raw) as Partial<AuthState>;
+  return {
+    lastFailureNotifiedAt: parsed.lastFailureNotifiedAt ?? null,
+    lastFailureKind: parsed.lastFailureKind ?? null,
+    lastFailureReason: parsed.lastFailureReason ?? null,
+    lastRefreshAttemptedAt: parsed.lastRefreshAttemptedAt ?? null
+  };
 }
 
 async function clearAuthState(env: Env, run: RunLog): Promise<void> {
@@ -594,10 +609,105 @@ async function clearAuthState(env: Env, run: RunLog): Promise<void> {
     JSON.stringify({
       lastFailureNotifiedAt: null,
       lastFailureKind: null,
-      lastFailureReason: null
+      lastFailureReason: null,
+      lastRefreshAttemptedAt: null
     })
   );
   addStep(run, "clear-auth-state", "success");
+}
+
+async function maybeTriggerBrowserbaseRefresh(
+  env: Env,
+  run: RunLog,
+  state: AuthState,
+  kind: TdfError["kind"],
+  reason: string
+): Promise<boolean> {
+  if (kind !== "auth") {
+    addStep(run, "browserbase-refresh-dispatch", "skipped", {
+      reason: "Only auth failures can trigger Browserbase refresh."
+    });
+    return false;
+  }
+
+  if (!env.GITHUB_REFRESH_TOKEN || !env.GITHUB_REPOSITORY) {
+    addStep(run, "browserbase-refresh-dispatch", "skipped", {
+      reason: "GITHUB_REFRESH_TOKEN or GITHUB_REPOSITORY is not configured."
+    });
+    return false;
+  }
+
+  const lastAttemptedAt = state.lastRefreshAttemptedAt
+    ? new Date(state.lastRefreshAttemptedAt).valueOf()
+    : 0;
+  if (lastAttemptedAt && Date.now() - lastAttemptedAt < browserbaseRefreshAttemptIntervalMs) {
+    addStep(run, "browserbase-refresh-dispatch", "skipped", {
+      reason: "Recent Browserbase refresh attempt is still inside throttle window.",
+      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
+    });
+    return false;
+  }
+
+  const started = Date.now();
+  const response = await fetch(
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/refresh-cookie.yml/dispatches`,
+    {
+      method: "POST",
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${env.GITHUB_REFRESH_TOKEN}`,
+        "Content-Type": "application/json",
+        "User-Agent": "tdf-alerts-worker"
+      },
+      body: JSON.stringify({
+        ref: env.GITHUB_REFRESH_REF ?? "main",
+        inputs: {
+          reason: reason.slice(0, 200),
+          source_run_id: run.id
+        }
+      })
+    }
+  );
+
+  if (!response.ok) {
+    addStep(run, "browserbase-refresh-dispatch", "failure", {
+      durationMs: Date.now() - started,
+      status: response.status,
+      body: (await response.text()).slice(0, 300)
+    });
+    return false;
+  }
+
+  const attemptedAt = new Date().toISOString();
+  await env.TDF_ALERTS.put(
+    authStateKey,
+    JSON.stringify({
+      lastFailureNotifiedAt: state.lastFailureNotifiedAt,
+      lastFailureKind: kind,
+      lastFailureReason: reason,
+      lastRefreshAttemptedAt: attemptedAt
+    })
+  );
+  addStep(run, "browserbase-refresh-dispatch", "success", {
+    durationMs: Date.now() - started,
+    repository: env.GITHUB_REPOSITORY,
+    ref: env.GITHUB_REFRESH_REF ?? "main",
+    lastRefreshAttemptedAt: attemptedAt
+  });
+
+  try {
+    await sendMessage(
+      env,
+      `<b>Browserbase refresh started</b>\nI triggered one automatic cookie refresh attempt. I will use the refreshed cookie on the next check if it succeeds.`
+    );
+    addStep(run, "send-browserbase-refresh-started", "success");
+  } catch (error) {
+    addStep(run, "send-browserbase-refresh-started", "failure", {
+      message: errorMessage(error)
+    });
+  }
+
+  return true;
 }
 
 async function readLogs(env: Env): Promise<RunLog[]> {

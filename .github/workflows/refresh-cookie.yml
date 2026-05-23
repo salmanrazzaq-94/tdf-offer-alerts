@@ -1,0 +1,45 @@
+name: Refresh TDF Cookie
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: Why the refresh was requested
+        required: false
+      source_run_id:
+        description: Worker run id that requested refresh
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tdf-cookie-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh-cookie:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Refresh TDF cookie with Browserbase
+        run: npm run login:browserbase
+        env:
+          BROWSERBASE_API_KEY: ${{ secrets.BROWSERBASE_API_KEY }}
+          BROWSERBASE_PROJECT_ID: ${{ secrets.BROWSERBASE_PROJECT_ID }}
+          BROWSERBASE_CONTEXT_ID: ${{ secrets.BROWSERBASE_CONTEXT_ID }}
+          TDF_EMAIL: ${{ secrets.TDF_EMAIL }}
+          TDF_PASSWORD: ${{ secrets.TDF_PASSWORD }}
+          COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}

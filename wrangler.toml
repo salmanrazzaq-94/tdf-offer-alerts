@@ -3,6 +3,10 @@ main = "worker/index.ts"
 compatibility_date = "2026-05-23"
 workers_dev = true
 
+[vars]
+GITHUB_REPOSITORY = "salmanrazzaq-94/tdf-offer-alerts"
+GITHUB_REFRESH_REF = "main"
+
 [triggers]
 crons = ["*/10 * * * *", "0 13 * * *", "0 14 * * *"]
 

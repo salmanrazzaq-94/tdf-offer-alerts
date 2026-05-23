@@ -11,6 +11,7 @@ Cloudflare is the app. GitHub Actions are not used for runtime checks.
 - Cloudflare KV stores the TDF cookie, seen offer IDs, auth state, and recent run logs.
 - Browserbase is only used when the saved cookie expires and needs a refresh.
 - The normal checker never receives Browserbase credentials or TDF credentials.
+- On an auth failure, the Worker triggers one Browserbase refresh workflow and throttles repeated attempts.
 
 ## Commands
 
@@ -49,6 +50,7 @@ Each log includes:
 - notification status
 - failure kind: `auth`, `transient`, or `unexpected`
 - step-by-step diagnostics such as cookie bytes, session cookie presence, TDF HTTP status, content type, response size, retry waits, seen-state counts, and notification throttle decisions
+- Browserbase refresh dispatch status, GitHub target, throttle decisions, and Telegram delivery steps
 
 View logs:
 
@@ -65,7 +67,8 @@ The cheapest robust strategy is:
 1. Use the saved cookie in Cloudflare KV for all normal checks.
 2. If `/status`, `/offers`, or cron says the cookie failed, do not keep spamming alerts.
 3. Refresh the cookie with Browserbase only when needed.
-4. Browserbase logs in, verifies the TDF endpoint, and updates Cloudflare KV through the Worker.
+4. On auth failure, the Worker automatically dispatches one Browserbase refresh workflow.
+5. Browserbase logs in, verifies the TDF endpoint, and updates Cloudflare KV through the Worker.
 
 Cookie expiry cannot reliably be prolonged from our side. TDF controls server-side sessions and security cookies, and can invalidate them based on time, IP, browser fingerprint, logout, or security rotation.
 
@@ -99,6 +102,38 @@ The script:
 - verifies the performances endpoint
 - saves `TDF_COOKIE` to `.env`
 - updates Cloudflare KV by POSTing to the Worker cookie form endpoint
+
+## Automatic Browserbase Refresh
+
+The Worker cannot run Chromium itself. When it sees an `auth` failure, it calls GitHub's workflow dispatch API for `.github/workflows/refresh-cookie.yml`.
+
+The refresh workflow is not a scheduled checker. It exists only as an external Browserbase runner:
+
+- receives the dispatch from Cloudflare
+- runs `npm run login:browserbase`
+- logs into TDF with Browserbase
+- validates the performances endpoint
+- updates Cloudflare KV through the Worker
+
+The Worker throttles automatic refresh attempts to once every 6 hours. This protects Browserbase free minutes if TDF is down or a captcha blocks login.
+
+Cloudflare Worker secret needed for dispatch:
+
+```text
+GITHUB_REFRESH_TOKEN
+```
+
+GitHub Actions secrets needed by the refresh workflow:
+
+```text
+BROWSERBASE_API_KEY
+BROWSERBASE_PROJECT_ID
+BROWSERBASE_CONTEXT_ID
+TDF_EMAIL
+TDF_PASSWORD
+COOKIE_FORM_TOKEN
+WORKER_BASE_URL
+```
 
 ## Manual Fallback
 
@@ -140,6 +175,7 @@ Keep these out of git:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `COOKIE_FORM_TOKEN`
+- `GITHUB_REFRESH_TOKEN`
 - `BROWSERBASE_API_KEY`
 - `BROWSERBASE_PROJECT_ID`
 - `BROWSERBASE_CONTEXT_ID`
