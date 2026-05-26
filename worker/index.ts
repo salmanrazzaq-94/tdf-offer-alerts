@@ -52,7 +52,7 @@ type RunStep = {
 
 type RunLog = {
   id: string;
-  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug";
+  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug" | "refresh";
   status: "success" | "failure" | "skipped";
   trigger: string;
   startedAt: string;
@@ -87,6 +87,11 @@ type HealthState = {
   lastStaleNotifiedAt: string | null;
 };
 
+type BrowserbaseRefreshResult = {
+  status: "started" | "throttled" | "not-auth" | "not-configured" | "dispatch-failed";
+  attemptedAt?: string;
+};
+
 type DebugSnapshot = {
   version: string;
   generatedAt: string;
@@ -109,10 +114,10 @@ const deltaLockKey = "DELTA_LOCK";
 const workerVersion = "2026-05-23.cloudflare-core-v2";
 const tdfOffersUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
 const tdfPerformancesUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
+const tdfMemberHomeUrl = "https://my.tdf.org/";
 const authFailureNotifyIntervalMs = 12 * 60 * 60 * 1000;
 const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
 const staleSuccessAlertAfterMs = 30 * 60 * 1000;
-const staleSuccessNotifyIntervalMs = 60 * 60 * 1000;
 const deltaLockTtlMs = 8 * 60 * 1000;
 const maxLogs = 200;
 
@@ -162,6 +167,14 @@ export default {
       return json(result);
     }
 
+    if (request.method === "POST" && url.pathname === "/refresh-failed") {
+      if (!isAuthorized(url, env)) {
+        return new Response("Not found", { status: 404 });
+      }
+      const result = await recordBrowserbaseRefreshFailure(request, env);
+      return json(result);
+    }
+
     if (request.method === "GET" && url.pathname === "/cookie") {
       if (!isAuthorized(url, env)) {
         return new Response("Not found", { status: 404 });
@@ -179,6 +192,7 @@ export default {
       try {
         const result = await fetchTdfOffers(cookie, run);
         await saveCookie(env, result.cookie, "cookie-form", run);
+        await clearAuthState(env, run);
         finishRun(run, "success", {
           shows: result.offers.length,
           performances: countPerformances(result.offers)
@@ -305,13 +319,11 @@ async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
         durationMs: Date.now() - documentStarted
       });
       notificationSent = true;
-      for (const item of newItems) {
-        seen.add(item.id);
-      }
-      await writeSeen(env, seen, run);
     } else {
       addStep(run, "send-delta-alert", "skipped", { reason: "No new performances." });
     }
+
+    await writeSeen(env, new Set(items.map((item) => item.id)), run);
 
     await clearAuthState(env, run);
     finishRun(run, "success", {
@@ -481,23 +493,31 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
     state.lastFailureKind !== kind ||
     !lastNotifiedAt ||
     Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs;
+  const refreshResult = await maybeTriggerBrowserbaseRefresh(env, run, state, kind, message);
+  const suppressNotification =
+    kind === "auth" &&
+    (refreshResult.status === "started" || refreshResult.status === "throttled");
+  const notifyNow = shouldNotify && !suppressNotification;
 
   await env.TDF_ALERTS.put(
     authStateKey,
     JSON.stringify({
-      lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
+      lastFailureNotifiedAt: notifyNow ? new Date().toISOString() : state.lastFailureNotifiedAt,
       lastFailureKind: kind,
       lastFailureReason: message,
-      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
+      lastRefreshAttemptedAt: refreshResult.attemptedAt ?? state.lastRefreshAttemptedAt
     })
   );
   addStep(run, "failure-notification-throttle", "success", {
     shouldNotify,
+    notifyNow,
+    suppressNotification,
+    browserbaseRefreshStatus: refreshResult.status,
     lastFailureKind: state.lastFailureKind,
     lastFailureNotifiedAt: state.lastFailureNotifiedAt
   });
 
-  if (shouldNotify) {
+  if (notifyNow) {
     const sendStarted = Date.now();
     await sendMessage(
       env,
@@ -508,17 +528,82 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
     addStep(run, "send-telegram-failure", "success", { durationMs: Date.now() - sendStarted });
   } else {
     addStep(run, "send-telegram-failure", "skipped", {
-      reason: "Repeated failure notification is throttled."
+      reason: suppressNotification
+        ? "Automatic Browserbase recovery is handling this auth failure."
+        : "Repeated failure notification is throttled."
     });
   }
-
-  const refreshTriggered = await maybeTriggerBrowserbaseRefresh(env, run, state, kind, message);
 
   finishRun(run, "failure", {
     failureKind: kind,
     message,
-    notificationSent: shouldNotify || refreshTriggered
+    notificationSent: notifyNow
   });
+}
+
+async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Promise<RunLog> {
+  const run = createRun("refresh", "github:refresh-cookie");
+  const details = await readRefreshFailureDetails(request);
+  const reason = details.reason || "Browserbase refresh workflow failed.";
+  const sourceRunId = details.source_run_id || details.sourceRunId;
+  const state = await readAuthState(env);
+
+  await env.TDF_ALERTS.put(
+    authStateKey,
+    JSON.stringify({
+      lastFailureNotifiedAt: new Date().toISOString(),
+      lastFailureKind: "auth",
+      lastFailureReason: reason,
+      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
+    } satisfies AuthState)
+  );
+
+  const sendStarted = Date.now();
+  await sendMessage(
+    env,
+    [
+      "<b>Browserbase refresh failed</b>",
+      "Automatic TDF login recovery did not complete.",
+      escapeHtml(reason),
+      sourceRunId ? `source=${escapeHtml(sourceRunId)}` : "",
+      "Send /cookie to paste a fresh TDF cookie."
+    ]
+      .filter(Boolean)
+      .join("\n")
+  );
+  addStep(run, "send-browserbase-refresh-failed", "success", {
+    durationMs: Date.now() - sendStarted,
+    sourceRunId
+  });
+
+  finishRun(run, "failure", {
+    failureKind: "auth",
+    message: reason,
+    notificationSent: true
+  });
+  await appendLog(env, run);
+  return run;
+}
+
+async function readRefreshFailureDetails(request: Request): Promise<Record<string, string>> {
+  const contentType = request.headers.get("content-type") ?? "";
+  if (contentType.includes("application/json")) {
+    const parsed = (await request.json()) as Record<string, unknown>;
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => [
+        key,
+        typeof value === "string" ? value : String(value)
+      ])
+    );
+  }
+
+  const form = await request.formData();
+  return Object.fromEntries(
+    [...form.entries()].map(([key, value]) => [
+      key,
+      typeof value === "string" ? value : value.name
+    ])
+  );
 }
 
 async function readCookie(env: Env, run: RunLog): Promise<string> {
@@ -538,7 +623,8 @@ async function readCookie(env: Env, run: RunLog): Promise<string> {
 }
 
 async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFetchResult> {
-  let activeCookie = await touchTdfMainPage(cookie, run);
+  let activeCookie = await refreshTdfMemberSession(cookie, run);
+  activeCookie = await touchTdfMainPage(activeCookie, run);
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     const started = Date.now();
@@ -600,6 +686,45 @@ async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFetchResu
   }
 
   throw lastError;
+}
+
+async function refreshTdfMemberSession(cookie: string, run: RunLog): Promise<string> {
+  const started = Date.now();
+  const response = await fetch(tdfMemberHomeUrl, {
+    headers: {
+      Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "en-US,en;q=0.9",
+      Cookie: cookie,
+      "User-Agent":
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
+    }
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  const setCookies = getSetCookieHeaders(response);
+  const setCookieNames = setCookies.map((value) => value.split("=", 1)[0]).filter(Boolean);
+  const details = {
+    status: response.status,
+    finalUrl: response.url,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started,
+    setCookieCount: setCookies.length,
+    setCookieNames
+  };
+
+  if (response.url.includes("/account/login")) {
+    addStep(run, "refresh-tdf-member-session", "failure", details);
+    throw new TdfError(`TDF member page redirected to login: ${response.url}`, "auth");
+  }
+
+  if (!response.ok) {
+    addStep(run, "refresh-tdf-member-session", "failure", details);
+    return cookie;
+  }
+
+  addStep(run, "refresh-tdf-member-session", "success", details);
+  return mergeSetCookies(cookie, setCookies);
 }
 
 async function touchTdfMainPage(cookie: string, run: RunLog): Promise<string> {
@@ -778,19 +903,19 @@ async function maybeTriggerBrowserbaseRefresh(
   state: AuthState,
   kind: TdfError["kind"],
   reason: string
-): Promise<boolean> {
+): Promise<BrowserbaseRefreshResult> {
   if (kind !== "auth") {
     addStep(run, "browserbase-refresh-dispatch", "skipped", {
       reason: "Only auth failures can trigger Browserbase refresh."
     });
-    return false;
+    return { status: "not-auth" };
   }
 
   if (!env.GITHUB_REFRESH_TOKEN || !env.GITHUB_REPOSITORY) {
     addStep(run, "browserbase-refresh-dispatch", "skipped", {
       reason: "GITHUB_REFRESH_TOKEN or GITHUB_REPOSITORY is not configured."
     });
-    return false;
+    return { status: "not-configured" };
   }
 
   const lastAttemptedAt = state.lastRefreshAttemptedAt
@@ -801,7 +926,7 @@ async function maybeTriggerBrowserbaseRefresh(
       reason: "Recent Browserbase refresh attempt is still inside throttle window.",
       lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
     });
-    return false;
+    return { status: "throttled" };
   }
 
   const started = Date.now();
@@ -831,19 +956,10 @@ async function maybeTriggerBrowserbaseRefresh(
       status: response.status,
       body: (await response.text()).slice(0, 300)
     });
-    return false;
+    return { status: "dispatch-failed" };
   }
 
   const attemptedAt = new Date().toISOString();
-  await env.TDF_ALERTS.put(
-    authStateKey,
-    JSON.stringify({
-      lastFailureNotifiedAt: state.lastFailureNotifiedAt,
-      lastFailureKind: kind,
-      lastFailureReason: reason,
-      lastRefreshAttemptedAt: attemptedAt
-    })
-  );
   addStep(run, "browserbase-refresh-dispatch", "success", {
     durationMs: Date.now() - started,
     repository: env.GITHUB_REPOSITORY,
@@ -851,19 +967,7 @@ async function maybeTriggerBrowserbaseRefresh(
     lastRefreshAttemptedAt: attemptedAt
   });
 
-  try {
-    await sendMessage(
-      env,
-      `<b>Browserbase refresh started</b>\nI triggered one automatic cookie refresh attempt. I will use the refreshed cookie on the next check if it succeeds.`
-    );
-    addStep(run, "send-browserbase-refresh-started", "success");
-  } catch (error) {
-    addStep(run, "send-browserbase-refresh-started", "failure", {
-      message: errorMessage(error)
-    });
-  }
-
-  return true;
+  return { status: "started", attemptedAt };
 }
 
 async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquired: boolean; owner: string }> {
@@ -937,33 +1041,11 @@ async function checkStaleHealth(env: Env, run: RunLog): Promise<void> {
     return;
   }
 
-  const state = await readHealthState(env);
-  const lastNotifiedAt = state.lastStaleNotifiedAt
-    ? new Date(state.lastStaleNotifiedAt).valueOf()
-    : 0;
-  const shouldNotify = !lastNotifiedAt || Date.now() - lastNotifiedAt >= staleSuccessNotifyIntervalMs;
   addStep(run, "stale-health-check", "failure", {
     lastSuccessAt: lastSuccess.finishedAt,
     ageMs,
-    shouldNotify,
-    lastStaleNotifiedAt: state.lastStaleNotifiedAt
+    reason: "Previous successful delta run is stale."
   });
-
-  if (!shouldNotify) {
-    return;
-  }
-
-  await sendMessage(
-    env,
-    `<b>TDF checker health warning</b>\nNo successful delta check since ${escapeHtml(lastSuccess.finishedAt)}. This run is trying now.`
-  );
-  await env.TDF_ALERTS.put(
-    healthStateKey,
-    JSON.stringify({
-      lastStaleNotifiedAt: new Date().toISOString()
-    } satisfies HealthState)
-  );
-  addStep(run, "send-stale-health-warning", "success");
 }
 
 async function readHealthState(env: Env): Promise<HealthState> {

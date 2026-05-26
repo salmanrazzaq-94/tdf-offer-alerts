@@ -48,3 +48,18 @@ jobs:
           TDF_PASSWORD: ${{ secrets.TDF_PASSWORD }}
           COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
           WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+
+      - name: Notify worker if Browserbase refresh fails
+        if: failure()
+        run: |
+          payload="$(node -e 'console.log(JSON.stringify({ reason: process.env.REASON, source_run_id: process.env.SOURCE_RUN_ID || "" }))')"
+          curl --fail-with-body \
+            --request POST \
+            --header "content-type: application/json" \
+            --data "$payload" \
+            "${WORKER_BASE_URL%/}/refresh-failed?token=${COOKIE_FORM_TOKEN}"
+        env:
+          COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+          REASON: Browserbase refresh workflow failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          SOURCE_RUN_ID: ${{ github.event.inputs.source_run_id }}
