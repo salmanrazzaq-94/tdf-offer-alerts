@@ -18,7 +18,7 @@ Deterministic tests do not call live TDF, Telegram, GitHub, Browserbase, or Clou
 
 ## Pull request E2E
 
-The `pre-check` workflow also deploys an isolated E2E Worker after `npm run quality` passes. That E2E job uses separate Cloudflare resources and secrets, refreshes a cookie through Browserbase, and exercises `/cookie`, `/verify-cookie`, `/run-delta`, `/run-daily`, `/debug`, `/logs`, `/telegram`, and `/refresh-failed`.
+The `pre-check` workflow also runs an isolated E2E Worker path after `npm run quality` passes. That E2E job uses separate secrets, refreshes a cookie through Browserbase, and exercises `/cookie`, `/verify-cookie`, `/run-delta`, `/run-daily`, operator `/debug` and `/logs`, supported Telegram commands, and `/refresh-failed`.
 
 The GitHub E2E job sends Telegram test messages only to the E2E test chat. The fake `/refresh-failed` callback is exercised with notification suppressed, so CI does not send a fake Browserbase failure alert.
 

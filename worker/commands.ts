@@ -1,12 +1,12 @@
-import { formatDebug, formatLogs, formatStatus, timestampedFilename } from "./formatters.js";
-import { addStep, appendLog, createRun, finishRun, readLogs } from "./logging.js";
+import { formatStatus, timestampedFilename } from "./formatters.js";
+import { addStep, appendLog, createRun, finishRun } from "./logging.js";
 import { sendOfferNotification } from "./notifications.js";
 import { handleCheckFailure } from "./recovery.js";
 import { clearAuthState, persistRefreshedCookie, readCookie } from "./state.js";
 import { countPerformances, fetchTdfOffers, flattenOffers } from "./tdf.js";
 import { sendMessage } from "./telegram.js";
 import type { Env } from "./types.js";
-import { classifyError, errorMessage } from "./utils.js";
+import { errorMessage } from "./utils.js";
 import { buildDebugSnapshot } from "./debug.js";
 
 export async function runCommandOffers(env: Env): Promise<void> {
@@ -63,62 +63,6 @@ export async function runStatus(env: Env): Promise<void> {
     });
   } catch (error) {
     await handleCheckFailure(env, run, error);
-  }
-  await appendLog(env, run);
-}
-
-export async function runDebug(env: Env): Promise<void> {
-  const run = createRun("debug", "telegram:/debug");
-  try {
-    const snapshot = await buildDebugSnapshot(env);
-    const sendStarted = Date.now();
-    try {
-      await sendMessage(env, formatDebug(snapshot));
-      addStep(run, "send-telegram-debug", "success", { durationMs: Date.now() - sendStarted });
-    } catch (error) {
-      addStep(run, "send-telegram-debug", "failure", {
-        durationMs: Date.now() - sendStarted,
-        message: errorMessage(error)
-      });
-      throw error;
-    }
-    finishRun(run, "success", {
-      notificationSent: true,
-      message: "Debug snapshot sent."
-    });
-  } catch (error) {
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error)
-    });
-  }
-  await appendLog(env, run);
-}
-
-export async function runLogs(env: Env): Promise<void> {
-  const run = createRun("logs", "telegram:/logs");
-  const logs = await readLogs(env);
-  try {
-    const sendStarted = Date.now();
-    try {
-      await sendMessage(env, formatLogs(logs.slice(-8)));
-      addStep(run, "send-telegram-logs", "success", { durationMs: Date.now() - sendStarted });
-    } catch (error) {
-      addStep(run, "send-telegram-logs", "failure", {
-        durationMs: Date.now() - sendStarted,
-        message: errorMessage(error)
-      });
-      throw error;
-    }
-    finishRun(run, "success", {
-      notificationSent: true,
-      message: `Sent ${Math.min(logs.length, 8)} recent run logs.`
-    });
-  } catch (error) {
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error)
-    });
   }
   await appendLog(env, run);
 }

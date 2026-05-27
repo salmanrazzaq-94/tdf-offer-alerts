@@ -1,86 +1,34 @@
-# Sanitized Run Log Examples
+# Sanitized Operational Log Examples
 
-These examples show the shape of operational logs written to `RUN_LOGS`. Values are fake and redacted.
+Routine success runs are emitted as structured `console.log` events and stored in Cloudflare Workers Logs. Only failed runs are optionally persisted to `RUN_LOGS` as failure breadcrumbs. Values are fake and redacted.
 
-## Successful Delta Run
+## Successful Delta Run In Workers Logs
 
 ```json
 {
-  "id": "2026-05-27T01:50:02.000Z-redacted",
-  "event": "delta",
-  "status": "success",
-  "trigger": "cron:*/10 * * * *",
-  "startedAt": "2026-05-27T01:50:02.000Z",
-  "finishedAt": "2026-05-27T01:50:04.000Z",
-  "durationMs": 2000,
-  "version": "2026-05-27.production-hardening-v1",
-  "shows": 4,
-  "performances": 21,
-  "newPerformances": 0,
-  "notificationSent": false,
-  "steps": [
-    {
-      "name": "acquire-delta-lock",
-      "status": "success",
-      "details": {
-        "owner": "2026-05-27T01:50:02.000Z-redacted"
-      }
-    },
-    {
-      "name": "read-cookie",
-      "status": "success",
-      "details": {
-        "cookieBytes": 247,
-        "hasSessionCookie": true,
-        "hasTnewCookie": true
-      }
-    },
-    {
-      "name": "touch-tdf-main-page",
-      "status": "success",
-      "details": {
-        "status": 200,
-        "authenticatedSignals": true,
-        "setCookieCount": 1,
-        "setCookieNames": ["TNEW"]
-      }
-    },
-    {
-      "name": "fetch-tdf-performances",
-      "status": "success",
-      "details": {
-        "status": 200,
-        "contentType": "application/json",
-        "shows": 4,
-        "performances": 21
-      }
-    },
-    {
-      "name": "diff-offers",
-      "status": "success",
-      "details": {
-        "seenBefore": 21,
-        "currentPerformances": 21,
-        "newPerformances": 0,
-        "recoveredSeenState": false
-      }
-    },
-    {
-      "name": "send-delta-alert",
-      "status": "skipped",
-      "details": {
-        "reason": "No new performances."
-      }
-    },
-    {
-      "name": "release-delta-lock",
-      "status": "success"
-    }
+  "event": "tdf-run-finished",
+  "run": {
+    "id": "2026-05-27T01:50:02.000Z-redacted",
+    "event": "delta",
+    "status": "success",
+    "trigger": "cron:*/10 * * * *",
+    "durationMs": 2000,
+    "shows": 4,
+    "performances": 21,
+    "newPerformances": 0,
+    "notificationSent": false,
+    "steps": 11
+  },
+  "stepSummaries": [
+    { "name": "read-cookie", "status": "success" },
+    { "name": "fetch-tdf-performances", "status": "success" },
+    { "name": "diff-offers", "status": "success" },
+    { "name": "send-delta-alert", "status": "skipped" }
   ]
 }
 ```
 
-## Auth Failure With Browserbase Recovery Dispatch
+## Auth Failure Persisted To `RUN_LOGS`
 
 ```json
 {

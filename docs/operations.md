@@ -87,6 +87,8 @@ npm run login:browserbase
 
 The script logs into TDF, verifies the performances endpoint, writes `TDF_COOKIE` locally, and posts it to the Worker `/cookie` endpoint when `WORKER_BASE_URL` and `COOKIE_FORM_TOKEN` are configured.
 
+If Cloudflare KV writes are exhausted for the day, normal TDF reads still keep a refreshed cookie in the Worker runtime and attempt a one-day Cloudflare Cache fallback. This is an emergency bridge for `/offers` and cron while KV is unavailable; KV remains the canonical cookie store when writes recover.
+
 If Browserbase hits a human challenge:
 
 ```sh
@@ -107,19 +109,19 @@ Then send `/cookie` to the Telegram bot and paste the saved cookie into the priv
 | `cookie.hasSessionCookie` / `hasTnewCookie` | Whether expected session markers are present |
 | `auth.lastFailureKind` | Last classified failure, if any |
 | `auth.lastRefreshAttemptStatus` | Browserbase dispatch state: `started`, `throttled`, `dispatch-failed`, or config fallback |
-| `lastSuccess` | Last successful Worker run |
-| `lastFailure` | Last failed Worker run |
-| `recentRuns` | Compact recent run summaries |
+| `health.lastDeltaSuccessAt` | Last persisted successful delta timestamp |
+| `lastFailure` | Last failed Worker run persisted as a failure breadcrumb |
+| `recentRuns` | Compact persisted failure breadcrumbs and any legacy run entries |
 
-Use `/logs?token=...` when the summary is not enough and you need step-by-step run details.
+Use Cloudflare Workers Logs for routine successful run details. Use `/logs?token=...` only when you need persisted failure breadcrumbs from KV.
 
 ## Common Incidents
 
 | Symptom | First check | Usual action |
 |---|---|---|
-| No Telegram alerts | `/debug` and `/logs` | Confirm delta checks are succeeding and `newPerformances` is actually nonzero |
+| No Telegram alerts | Workers Logs and `/debug` | Confirm delta checks are succeeding and `newPerformances` is actually nonzero |
 | Cookie expired | `auth.lastFailureKind = auth` | Wait for Browserbase dispatch or run `npm run login:browserbase` |
-| Browserbase failed | Telegram refresh-failure alert or `/logs` | If challenge/captcha appears, use `npm run login:local` and `/cookie` |
+| Browserbase failed | Telegram refresh-failure alert, Workers Logs, or `/logs` failure breadcrumb | If challenge/captcha appears, use `npm run login:local` and `/cookie` |
 | TDF is down or rate limited | failure kind `transient` | Let scheduled retries continue unless failures persist |
 | Telegram document failed | run step `send-telegram-document:failure` | Summary still sent; inspect Telegram/API status before retrying |
 | Corrupted KV state | run step shows recovered state | Let the next successful run rewrite the recovered key |

@@ -99,6 +99,7 @@ export type CookieSaveMetadata = {
 
 export type HealthState = {
   lastStaleNotifiedAt: string | null;
+  lastDeltaSuccessAt: string | null;
 };
 
 export type BrowserbaseRefreshResult = {

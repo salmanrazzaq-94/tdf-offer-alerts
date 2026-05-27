@@ -3,7 +3,7 @@ import test from "node:test";
 import { handleTelegram, sendMessage } from "../worker/telegram.js";
 import { MemoryKV, env, response, sampleOffers, withFetch } from "./worker-helpers.js";
 
-test("unauthorized Telegram chats are ignored with a sanitized ingress log", async () => {
+test("unauthorized Telegram chats are ignored without writing KV", async () => {
   const kv = new MemoryKV();
 
   await withFetch(async () => {
@@ -17,12 +17,11 @@ test("unauthorized Telegram chats are ignored with a sanitized ingress log", asy
     }, env(kv), "https://worker.test/telegram");
   });
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ trigger: string; status: string }>;
-  assert.equal(logs.at(-1)?.trigger, "telegram:ignored");
-  assert.equal(logs.at(-1)?.status, "skipped");
+  assert.equal(kv.values.get("RUN_LOGS"), undefined);
+  assert.deepEqual(kv.writes, []);
 });
 
-test("unknown authorized Telegram commands are logged without sending a message", async () => {
+test("unknown authorized Telegram commands are ignored without writing KV", async () => {
   const kv = new MemoryKV();
 
   await withFetch(async () => {
@@ -36,12 +35,11 @@ test("unknown authorized Telegram commands are logged without sending a message"
     }, env(kv), "https://worker.test/telegram");
   });
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ trigger: string; status: string }>;
-  assert.equal(logs.at(-1)?.trigger, "telegram:unknown");
-  assert.equal(logs.at(-1)?.status, "skipped");
+  assert.equal(kv.values.get("RUN_LOGS"), undefined);
+  assert.deepEqual(kv.writes, []);
 });
 
-test("help command logs ingress and sends the command list", async () => {
+test("help command sends the reduced command list without writing KV on success", async () => {
   const kv = new MemoryKV();
   const bodies: string[] = [];
 
@@ -58,9 +56,8 @@ test("help command logs ingress and sends the command list", async () => {
   });
 
   assert.match(bodies.join("\n"), /Commands: \/offers/);
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ trigger: string; status: string }>;
-  assert.equal(logs.at(-1)?.trigger, "telegram:/help");
-  assert.equal(logs.at(-1)?.status, "success");
+  assert.doesNotMatch(bodies.join("\n"), /\/debug|\/logs/);
+  assert.equal(kv.values.get("RUN_LOGS"), undefined);
 });
 
 test("help command logs Telegram response failures", async () => {
@@ -88,24 +85,13 @@ test("help command logs Telegram response failures", async () => {
   assert.match(String(sendStep?.details?.["message"]), /telegram down/);
 });
 
-test("offers command logs successful Telegram command runs", async () => {
+test("offers command sends Telegram messages without writing success logs to KV", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
 
   await withFetch(tdfAndTelegramFetch(), () => runTelegramCommand(kv, "/offers"));
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-    event: string;
-    trigger: string;
-    status: string;
-    steps: Array<{ name: string; status: string }>;
-  }>;
-  const run = logs.at(-1);
-  assert.equal(run?.event, "command");
-  assert.equal(run?.trigger, "telegram:/offers");
-  assert.equal(run?.status, "success");
-  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-summary:success"));
-  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:success"));
+  assert.equal(kv.values.get("RUN_LOGS"), undefined);
 });
 
 test("status command logs Telegram send failures as command failures", async () => {
