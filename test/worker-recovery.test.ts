@@ -8,7 +8,7 @@ import {
   resetBrowserbaseRefreshMemoryForTest
 } from "../worker/recovery.js";
 import { TdfError } from "../worker/utils.js";
-import { env, envWithoutGithubRefresh, MemoryKV, response, withFetch } from "./worker-helpers.js";
+import { captureRuntimeEvents, env, envWithoutGithubRefresh, lastRunEvent, MemoryKV, response, withFetch } from "./worker-helpers.js";
 
 test("Browserbase refresh dispatch records the GitHub target and source run id", async () => {
   resetBrowserbaseRefreshMemoryForTest();
@@ -112,59 +112,60 @@ test("refresh failure callback logs suppressed CI failures without Telegram nois
   resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
 
-  await withFetch(async () => {
-    throw new Error("Telegram send should not be called.");
-  }, async () => {
-    const run = await recordBrowserbaseRefreshFailure(new Request("https://worker.test/refresh-failed", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        notify: "false",
-        reason: "CI callback",
-        source_run_id: "worker-run-1"
-      })
-    }), env(kv));
+  const events = await captureRuntimeEvents(async () => {
+    await withFetch(async () => {
+      throw new Error("Telegram send should not be called.");
+    }, async () => {
+      const run = await recordBrowserbaseRefreshFailure(new Request("https://worker.test/refresh-failed", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          notify: "false",
+          reason: "CI callback",
+          source_run_id: "worker-run-1"
+        })
+      }), env(kv));
 
-    assert.equal(run.status, "failure");
-    assert.equal(run.notificationSent, false);
-    assert.equal(run.sourceRunId, "worker-run-1");
+      assert.equal(run.status, "failure");
+      assert.equal(run.notificationSent, false);
+      assert.equal(run.sourceRunId, "worker-run-1");
+    });
   });
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ event: string; sourceRunId?: string }>;
-  assert.equal(logs.at(-1)?.event, "refresh");
-  assert.equal(logs.at(-1)?.sourceRunId, "worker-run-1");
+  const run = lastRunEvent(events)["run"] as { event?: string; status?: string; notificationSent?: boolean };
+  assert.equal(run.event, "refresh");
+  assert.equal(run.status, "failure");
+  assert.equal(run.notificationSent, false);
 });
 
 test("refresh failure callback persists Telegram notification failures", async () => {
   resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
 
-  await withFetch(async () => response("telegram down", { status: 500 }), async () => {
-    const run = await recordBrowserbaseRefreshFailure(new Request("https://worker.test/refresh-failed", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        reason: "Browserbase failed",
-        source_run_id: "worker-run-2"
-      })
-    }), env(kv));
+  const events = await captureRuntimeEvents(async () => {
+    await withFetch(async () => response("telegram down", { status: 500 }), async () => {
+      const run = await recordBrowserbaseRefreshFailure(new Request("https://worker.test/refresh-failed", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          reason: "Browserbase failed",
+          source_run_id: "worker-run-2"
+        })
+      }), env(kv));
 
-    assert.equal(run.status, "failure");
-    assert.equal(run.notificationSent, false);
-    assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "send-browserbase-refresh-failed:failure"));
+      assert.equal(run.status, "failure");
+      assert.equal(run.notificationSent, false);
+      assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "send-browserbase-refresh-failed:failure"));
+    });
   });
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-    event: string;
-    sourceRunId?: string;
-    notificationSent?: boolean;
-    steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
-  }>;
-  const run = logs.at(-1);
-  assert.equal(run?.event, "refresh");
-  assert.equal(run?.sourceRunId, "worker-run-2");
-  assert.equal(run?.notificationSent, false);
-  const sendStep = run?.steps.find((step) => step.name === "send-browserbase-refresh-failed");
+  const entry = lastRunEvent(events);
+  const run = entry["run"] as { event?: string; status?: string; notificationSent?: boolean };
+  const stepSummaries = entry["stepSummaries"] as Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+  assert.equal(run.event, "refresh");
+  assert.equal(run.status, "failure");
+  assert.equal(run.notificationSent, false);
+  const sendStep = stepSummaries.find((step) => step.name === "send-browserbase-refresh-failed");
   assert.equal(sendStep?.status, "failure");
   assert.match(String(sendStep?.details?.["message"]), /telegram down/);
 });

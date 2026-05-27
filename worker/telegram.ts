@@ -10,14 +10,14 @@ export async function handleTelegram(update: TelegramUpdate, env: Env, requestUr
   const message = update.message;
   const text = message?.text?.trim().toLowerCase();
   if (!message || !text) {
-    await recordTelegramIngress(env, "telegram:ignored", "skipped", {
+    recordTelegramIngress("telegram:ignored", "skipped", {
       reason: "Missing Telegram message text."
     });
     return;
   }
 
   if (String(message.chat.id) !== env.TELEGRAM_CHAT_ID) {
-    await recordTelegramIngress(env, "telegram:ignored", "skipped", {
+    recordTelegramIngress("telegram:ignored", "skipped", {
       reason: "Unauthorized Telegram chat.",
       chatId: String(message.chat.id)
     });
@@ -56,7 +56,7 @@ export async function handleTelegram(update: TelegramUpdate, env: Env, requestUr
     return;
   }
 
-  await recordTelegramIngress(env, "telegram:unknown", "skipped", {
+  recordTelegramIngress("telegram:unknown", "skipped", {
     command: text.slice(0, 40)
   });
 }
@@ -92,23 +92,24 @@ export async function sendDocument(env: Env, filename: string, content: string, 
   }
 }
 
-async function recordTelegramIngress(
-  env: Env,
+function recordTelegramIngress(
   trigger: string,
   status: "success" | "skipped",
   details: Record<string, unknown>
-): Promise<void> {
+): void {
   const run = createRun("command", trigger);
   addStep(run, "telegram-ingress", status, sanitizeUnknown(details) as Record<string, unknown>);
   finishRun(run, status, {
     message: status === "success" ? "Telegram command accepted." : "Telegram command ignored."
   });
-  await appendLog(env, run).catch((error: unknown) => {
+  try {
+    appendLog(run);
+  } catch (error) {
     console.error(JSON.stringify({
       event: "tdf-telegram-ingress-log-failed",
       message: errorMessage(error)
     }));
-  });
+  }
 }
 
 async function runTelegramMessageCommand(
@@ -138,10 +139,12 @@ async function runTelegramMessageCommand(
       notificationSent: false
     });
   }
-  await appendLog(env, run).catch((error: unknown) => {
+  try {
+    appendLog(run);
+  } catch (error) {
     console.error(JSON.stringify({
       event: "tdf-telegram-command-log-failed",
       message: errorMessage(error)
     }));
-  });
+  }
 }

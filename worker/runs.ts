@@ -32,7 +32,7 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
       finishRun(run, "skipped", {
         message: "Another recent delta check is already running."
       });
-      await appendLog(env, run);
+      appendLog(run);
       return run;
     }
     if (trigger.startsWith("cron:")) {
@@ -102,7 +102,7 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
     }
   }
 
-  await appendLog(env, run);
+  appendLog(run);
   return run;
 }
 
@@ -138,7 +138,7 @@ export async function runCookieVerification(
       message: errorMessage(error)
     });
   }
-  await appendLog(env, run);
+  appendLog(run);
   return run;
 }
 
@@ -168,7 +168,7 @@ export async function runDailyDigest(env: Env, trigger: string): Promise<RunLog>
     await handleCheckFailure(env, run, error);
   }
 
-  await appendLog(env, run);
+  appendLog(run);
   return run;
 }
 
@@ -187,22 +187,22 @@ export async function runCookieFormSave(
       shows: result.offers.length,
       performances: countPerformances(result.offers)
     });
-    await appendLog(env, run);
+    appendLog(run);
     return { message: `Saved. ${result.offers.length} shows available.`, status: 200 };
   } catch (error) {
     finishRun(run, "failure", {
       failureKind: classifyError(error),
       message: errorMessage(error)
     });
-    await appendLog(env, run);
+    appendLog(run);
     return { message: `Cookie did not work. ${escapeHtml(errorMessage(error))}`, status: 400 };
   }
 }
 
-export async function appendDailyGuardSkip(env: Env, trigger: string): Promise<RunLog> {
+export function appendDailyGuardSkip(trigger: string): RunLog {
   const run = createRun("daily", trigger);
   addStep(run, "new-york-9am-guard", "skipped", { newYorkHour: newYorkHour() });
   finishRun(run, "skipped", { message: "Not 9am America/New_York." });
-  await appendLog(env, run);
+  appendLog(run);
   return run;
 }

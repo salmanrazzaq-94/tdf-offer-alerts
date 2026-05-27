@@ -57,8 +57,7 @@ Worker: 2026-05-27.production-hardening-v1
   "version": "2026-05-27.production-hardening-v1",
   "cookie": { "savedAt": "2026-05-27T01:42:10.000Z", "source": "tdf-set-cookie" },
   "auth": { "lastFailureKind": null, "lastRefreshAttemptStatus": null },
-  "health": { "lastDeltaSuccessAt": "2026-05-27T01:50:02.000Z" },
-  "lastFailure": null
+  "health": { "lastDeltaSuccessAt": "2026-05-27T01:50:02.000Z" }
 }
 ```
 

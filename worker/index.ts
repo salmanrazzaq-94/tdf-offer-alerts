@@ -1,6 +1,6 @@
 import { buildDebugSnapshot } from "./debug.js";
 import { cookieForm, newYorkHour } from "./formatters.js";
-import { logRuntimeEvent, readLogs } from "./logging.js";
+import { logRuntimeEvent } from "./logging.js";
 import { recordBrowserbaseRefreshFailure } from "./recovery.js";
 import {
   appendDailyGuardSkip,
@@ -29,13 +29,6 @@ export default {
           status: 200
         });
         return json({ ok: true });
-      }
-
-      if (request.method === "GET" && url.pathname === "/logs") {
-        if (!isAuthorized(url, env.COOKIE_FORM_TOKEN)) {
-          return unauthorized(request, url);
-        }
-        return json(await readLogs(env));
       }
 
       if (request.method === "GET" && url.pathname === "/debug") {
@@ -121,7 +114,7 @@ export default {
         if (newYorkHour() === "09") {
           await runDailyDigest(env, `cron:${controller.cron}`);
         } else {
-          await appendDailyGuardSkip(env, `cron:${controller.cron}`);
+          appendDailyGuardSkip(`cron:${controller.cron}`);
         }
         logRuntimeEvent("info", "worker-cron-completed", { cron: controller.cron });
         return;

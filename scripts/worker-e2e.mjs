@@ -26,6 +26,7 @@ const token = required("E2E_COOKIE_FORM_TOKEN");
 const telegramChatId = required("E2E_TELEGRAM_CHAT_ID");
 const tdfCookie = readEnvFileValue("TDF_COOKIE");
 const telegramCalls = [];
+const runtimeEvents = [];
 const workerClient = localMode ? await createLocalWorkerClient() : null;
 
 const health = await getJson("/health", { authorized: false });
@@ -60,13 +61,8 @@ assertStepSucceeded(dailyRun, "send-telegram-summary");
 assertStepSucceeded(dailyRun, "send-telegram-document");
 
 const debugSnapshot = await getJson("/debug");
-if (!debugSnapshot.cookie || !debugSnapshot.auth || !Array.isArray(debugSnapshot.recentRuns)) {
+if (!debugSnapshot.cookie || !debugSnapshot.auth || !debugSnapshot.health) {
   throw new Error(`/debug returned unexpected payload: ${JSON.stringify(debugSnapshot)}`);
-}
-
-const logsSnapshot = await getJson("/logs");
-if (!Array.isArray(logsSnapshot)) {
-  throw new Error(`/logs returned unexpected payload: ${JSON.stringify(logsSnapshot)}`);
 }
 
 const statusRun = await runTelegramCommand("/status", ["sendMessage"], "telegram:/status");
@@ -190,7 +186,7 @@ async function runTelegramCommand(text, expectedTelegramMethods, trigger) {
       }
     }
   }
-  await assertNoRecentFailure(trigger, commandStartedAt);
+  assertNoRecentFailure(trigger, commandStartedAt);
   return { status: "success" };
 }
 
@@ -247,6 +243,16 @@ async function createLocalWorkerClient() {
         }
       };
       const originalFetch = globalThis.fetch;
+      const originalLog = console.log;
+      const originalWarn = console.warn;
+      const originalError = console.error;
+      const captureRuntimeEvent = (value) => {
+        try {
+          runtimeEvents.push(JSON.parse(String(value)));
+        } catch {
+          // Keep non-JSON output out of the E2E signal stream.
+        }
+      };
       globalThis.fetch = async (fetchInput, fetchInit) => {
         const url = String(fetchInput instanceof Request ? fetchInput.url : fetchInput);
         if (url.includes("api.telegram.org")) {
@@ -257,27 +263,34 @@ async function createLocalWorkerClient() {
         }
         return originalFetch(fetchInput, fetchInit);
       };
+      console.log = captureRuntimeEvent;
+      console.warn = captureRuntimeEvent;
+      console.error = captureRuntimeEvent;
       try {
         const response = await worker.fetch(new Request(input, init), env, ctx);
         await Promise.all(waitUntilPromises);
         return response;
       } finally {
         globalThis.fetch = originalFetch;
+        console.log = originalLog;
+        console.warn = originalWarn;
+        console.error = originalError;
       }
     }
   };
 }
 
-async function assertNoRecentFailure(trigger, commandStartedAt) {
+function assertNoRecentFailure(trigger, commandStartedAt) {
   if (!localMode) {
-    await new Promise((resolve) => setTimeout(resolve, 3_000));
+    return;
   }
-  const logs = await getJson("/logs");
-  const failure = [...logs].reverse().find((candidate) =>
-    candidate.status === "failure" &&
-    candidate.trigger === trigger &&
-    new Date(candidate.startedAt).getTime() >= commandStartedAt - 5_000
-  );
+  const failure = [...runtimeEvents].reverse().find((candidate) => {
+    const run = candidate.run;
+    return candidate.event === "tdf-run-finished" &&
+      run?.status === "failure" &&
+      run?.trigger === trigger &&
+      new Date(candidate.at).getTime() >= commandStartedAt - 5_000;
+  });
   if (failure) {
     throw new Error(`${trigger} recorded a failure: ${JSON.stringify(failure)}`);
   }

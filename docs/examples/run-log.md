@@ -1,6 +1,6 @@
 # Sanitized Operational Log Examples
 
-Routine success runs are emitted as structured `console.log` events and stored in Cloudflare Workers Logs. Only failed runs are optionally persisted to `RUN_LOGS` as failure breadcrumbs. Values are fake and redacted.
+Runs are emitted as structured `console.log` events and stored in Cloudflare Workers Logs. KV is not used for run-log storage. Values are fake and redacted.
 
 ## Successful Delta Run In Workers Logs
 
@@ -28,7 +28,7 @@ Routine success runs are emitted as structured `console.log` events and stored i
 }
 ```
 
-## Auth Failure Persisted To `RUN_LOGS`
+## Auth Failure In Workers Logs
 
 ```json
 {

@@ -122,7 +122,6 @@ test("e2e script verifies worker endpoints and telegram delivery paths", () => {
   assert.match(workerE2eScript, /\/run-delta/);
   assert.match(workerE2eScript, /\/run-daily/);
   assert.match(workerE2eScript, /\/debug/);
-  assert.match(workerE2eScript, /\/logs/);
   assert.match(workerE2eScript, /\/telegram/);
   assert.match(workerE2eScript, /\/refresh-failed/);
   assert.match(workerE2eScript, /notify: "false"/);
