@@ -4,190 +4,104 @@
 
 # TDF Offer Alerts
 
-TDF Offer Alerts is a small, session-aware monitoring system for TDF Passport availability. It watches current offers, sends clean Telegram updates, keeps the authenticated session warm, records detailed operational logs, and uses Browserbase only when the saved session actually breaks.
+[![Pre-check](https://github.com/salmanrazzaq-94/tdf-offer-alerts/actions/workflows/pre-check.yml/badge.svg)](https://github.com/salmanrazzaq-94/tdf-offer-alerts/actions/workflows/pre-check.yml)
+[![Worker Smoke](https://github.com/salmanrazzaq-94/tdf-offer-alerts/actions/workflows/worker-smoke.yml/badge.svg)](https://github.com/salmanrazzaq-94/tdf-offer-alerts/actions/workflows/worker-smoke.yml)
+![TypeScript strict](https://img.shields.io/badge/TypeScript-strict-3178c6)
+![Coverage gate](https://img.shields.io/badge/coverage-80%25%2B%20lines%20%2F%2080%25%2B%20branches-2ea44f)
+![Cloudflare Worker](https://img.shields.io/badge/runtime-Cloudflare%20Worker-f38020)
+![Node >=22](https://img.shields.io/badge/node-%3E%3D22-43853d)
 
-The core idea is simple: do the cheap reliable thing every 10 minutes, and use the expensive browser automation only as a recovery tool.
+TDF Offer Alerts is a self-healing Cloudflare Worker that watches authenticated TDF Passport availability, sends Telegram updates, and recovers broken sessions with Browserbase only when the saved login actually fails.
 
-## The Problem
-
-TDF offers are time-sensitive, but the useful data sits behind an authenticated session. A naive monitor has three problems:
-
-- It can miss new performances because checks are manual.
-- It can lose access when cookies expire or security cookies rotate.
-- It can fail silently because “not logged in,” “TDF returned 500,” and “Telegram failed” all look like generic breakage unless every step is logged.
-
-This project solves that by treating authentication as part of the product, not an afterthought.
+It is a small app, but it is built like production software: strict TypeScript, deterministic integration tests, isolated E2E checks, protected main deploys, and operational logs for every meaningful decision.
 
 ## What It Does
 
-- Checks TDF every 10 minutes from Cloudflare.
-- Sends Telegram alerts only for newly seen performances.
+- Checks TDF every 10 minutes and sends Telegram alerts only for newly seen performances.
 - Sends a daily 9am New York digest of all current offers.
-- Lets you ask the bot for `/offers`, `/status`, `/debug`, `/logs`, and `/cookie`.
-- Touches the authenticated TDF page before fetching JSON, so TDF sees real session activity.
-- Captures and persists refreshed `Set-Cookie` values back into Cloudflare KV.
-- Automatically tries a Browserbase refresh once when auth fails.
-- Throttles refresh attempts and failure alerts so it does not burn browser minutes or spam Telegram.
-- Uses the delta check itself as the keepalive path, with duplicate cron protection and stale-success health warnings.
-- Stores structured logs for every meaningful decision.
-
-## Why The Design Is Smart
-
-The system deliberately separates the common path from the recovery path.
-
-| Concern | Decision | Why |
-|---|---|---|
-| Normal monitoring | Cloudflare Worker + Cron | Free-tier friendly, always-on, no laptop needed |
-| State | Cloudflare KV | Cookie, seen offers, auth state, and logs live close to the Worker |
-| Alerts | Telegram | Fast, free, works on phone and desktop |
-| Session keepalive | Touch main TDF offers page before JSON | The page returns authenticated HTML and can send refreshed cookies |
-| Cookie refresh | Merge `Set-Cookie` back into KV | Keeps server/browser session metadata fresh when TDF rotates it |
-| Browser automation | Browserbase only after auth failure | Avoids paying for browser minutes on every check |
-| Recovery automation | GitHub refresh workflow dispatched by Worker | Cloudflare cannot run Chromium; GitHub can run the Browserbase script |
-| Run safety | Best-effort cron lock | Prevents overlapping scheduled checks from duplicating work or messages |
-| Safety | Captcha-resilient, not captcha-bypassing | Stops and alerts when human verification is required |
-| Debuggability | Structured logs for every run | Future failures become inspectable instead of mysterious |
+- Supports `/offers`, `/status`, `/debug`, `/logs`, and `/cookie` through Telegram.
+- Keeps the authenticated session warm by touching the main TDF offers page before fetching JSON.
+- Persists refreshed `Set-Cookie` values back into Cloudflare KV.
+- Dispatches a GitHub Browserbase refresh only after auth failures.
+- Recovers from corrupted KV state without spamming Telegram.
+- Keeps production deploys locked to protected `main`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-  C[Cloudflare Cron<br/>Every 10 min] --> W[Cloudflare Worker]
-  T[Telegram Commands<br/>/offers /status /debug /logs /cookie] --> W
-  W --> KV[(Cloudflare KV<br/>cookie, seen ids, auth state, logs)]
-  W --> P[TDF Main Offers Page<br/>session touch + Set-Cookie]
-  P --> J[TDF Performances JSON]
-  J --> W
-  W --> TG[Telegram Alert or Digest]
-  W -- auth failure --> GH[GitHub Refresh Workflow]
-  GH --> BB[Browserbase + Playwright]
-  BB --> LOGIN[TDF Login]
-  BB --> W
-  W --> KV
+  Cron["Cloudflare Cron<br/>Every 10 min"] --> Worker["Cloudflare Worker"]
+  Telegram["Telegram Commands<br/>/offers /status /debug /logs /cookie"] --> Worker
+  Worker --> KV[("Cloudflare KV<br/>cookie, seen ids, auth state, logs")]
+  Worker --> TDFPage["TDF Offers Page<br/>session touch + Set-Cookie"]
+  TDFPage --> TDFJson["TDF Performances JSON"]
+  TDFJson --> Worker
+  Worker --> Alerts["Telegram Alert or Digest"]
+  Worker -- "auth failure" --> GitHub["GitHub Refresh Workflow"]
+  GitHub --> Browserbase["Browserbase + Playwright"]
+  Browserbase --> Login["TDF Login"]
+  Browserbase --> Worker
 ```
 
-## The Happy Path
+More detail: [Architecture](docs/architecture.md), [Operations](docs/operations.md), and [Startup Guide](docs/startup-guide.md).
 
-1. Worker reads `TDF_COOKIE` from KV.
-2. Worker opens `https://nycgw47.tdf.org/TDFCustomOfferings/Current`.
-3. It verifies logged-in page signals such as current offers and logout text.
-4. It captures any `Set-Cookie` headers and merges changed values into the stored cookie.
-5. It calls `Current?handler=Performances`.
-6. It diffs `productionSeasonId:performanceId` against `SEEN_OFFERS`.
-7. It sends one Telegram summary and one timestamped details file only when something new appears.
-8. It writes a structured log entry to `RUN_LOGS`.
+## Why This Is Production-Grade
 
-That normal delta run is also the keepalive. There is no separate artificial pinger: every scheduled check performs a useful authenticated page touch, captures refreshed cookies, and then fetches data.
+| Control | What it protects |
+|---|---|
+| Protected `main` with required `pre-check` and `e2e` | No direct unverified production changes |
+| `npm run quality` | One local and CI gate for typecheck, lint, Knip, coverage, and Wrangler dry-run |
+| Strict TypeScript | Worker, scripts, and tests are type checked before merge |
+| Typed ESLint with zero warnings | Catches async and correctness issues beyond formatting |
+| Knip | Prevents unused files, exports, and dependencies from drifting |
+| 80%+ line and branch coverage gates | Keeps tests above the meaningful threshold without chasing fake 100% |
+| Isolated E2E Worker | Exercises noisy paths without touching production KV or Telegram chat |
+| Main-only production deploy | Deploy workflow runs only from protected `main`; local production deploy refuses to run |
+| Quiet production smoke | Checks `/health`, `/debug`, and `/verify-cookie` without sending alerts |
+| Browserbase recovery throttling | Avoids burning browser minutes or spamming on repeated auth failures |
+| Corrupted KV recovery tests | Bad stored state is recoverable and logged instead of silently breaking checks |
 
-## The Recovery Path
+## Failure Modes Covered
 
-When the cookie fails:
-
-1. Worker classifies the failure as `auth`, `transient`, or `unexpected`.
-2. It sends a throttled Telegram failure notice.
-3. If the failure is `auth`, it dispatches `.github/workflows/refresh-cookie.yml`.
-4. GitHub runs `npm run login:browserbase`.
-5. Browserbase logs in through Playwright, verifies TDF JSON, and posts the fresh cookie back to the Worker.
-6. Worker stores the refreshed cookie in KV.
-7. The next check resumes normally.
-
-Refresh attempts are throttled to once every 6 hours. That protects Browserbase free minutes if TDF is down or showing a challenge.
+| Failure mode | Behavior |
+|---|---|
+| TDF cookie expires | Worker classifies `auth`, dispatches Browserbase refresh, suppresses noisy Telegram if recovery starts |
+| GitHub refresh dispatch fails | Telegram attention alert explains that automatic recovery could not start |
+| Browserbase refresh fails | Refresh workflow posts back to `/refresh-failed`; Worker logs and alerts once per throttle window |
+| TDF returns transient 5xx/429 | Worker retries, then sends a temporary-failure alert if retries exhaust |
+| Telegram details upload fails | Summary still counts as sent; document failure is logged without misclassifying auth |
+| Telegram summary send fails | Run records the failed send before failure handling continues |
+| Corrupted `SEEN_OFFERS` | Worker recovers from current TDF snapshot and avoids a full-current spam alert |
+| Corrupted run logs or metadata | Debug and verification paths keep working with safe defaults |
+| Overlapping cron runs | Best-effort lock skips duplicate scheduled delta checks |
+| Human challenge or captcha | Browserbase stops; manual `/cookie` refresh remains the fallback |
 
 ## Product Surface
 
-Telegram is the interface:
+Telegram is the primary interface.
 
 | Command | Result |
 |---|---|
 | `/offers` | Current TDF offers summary plus timestamped details file |
-| `/status` | Confirms whether the saved cookie can access TDF and shows recent recovery state |
-| `/debug` | Compact diagnostic snapshot: worker version, cookie metadata, recovery state, recent runs |
-| `/logs` | Recent run summaries directly in Telegram |
-| `/cookie` | Private Cloudflare form URL for manually saving a fresh cookie |
+| `/status` | Cookie health, recent recovery state, and worker version |
+| `/debug` | Compact operational snapshot |
+| `/logs` | Recent run summaries |
+| `/cookie` | Private form URL for pasting a fresh TDF cookie |
 
-Private HTTP endpoints are also available with `COOKIE_FORM_TOKEN`:
+Private HTTP endpoints are guarded by `COOKIE_FORM_TOKEN`.
 
 | Endpoint | Purpose |
 |---|---|
 | `/run-delta?token=...` | Run the delta checker now |
 | `/run-daily?token=...` | Send the current digest now |
-| `/verify-cookie?token=...` | Validate the saved cookie end to end without sending Telegram |
-| `/debug?token=...` | Inspect cookie metadata, auth state, health state, and recent runs |
-| `/logs?token=...` | Inspect full structured logs as JSON |
+| `/verify-cookie?token=...` | Validate the saved cookie without sending Telegram |
+| `/debug?token=...` | Inspect cookie, auth, health, and recent run state |
+| `/logs?token=...` | Inspect structured logs as JSON |
 | `/cookie?token=...` | Paste and validate a fresh cookie |
 
-## Logs Built For Future Us
+Sanitized examples: [Telegram messages](docs/examples/telegram-offers.md) and [run logs](docs/examples/run-log.md).
 
-Every run records enough detail to answer “where did it fail?” later:
-
-- run id, event, trigger, start/end time, duration
-- deployed worker version
-- cron lock acquisition/release or skipped duplicate run
-- stale-success health checks and throttled warnings
-- cookie byte length and whether expected session cookies exist
-- cookie save timestamp and source when the cookie is updated
-- main-page status, final URL, content type, authenticated page signals
-- `Set-Cookie` count and cookie names refreshed by TDF
-- JSON endpoint status, content type, body size, offer counts
-- seen-state count, diff count, and whether alerts were skipped or sent
-- Telegram message/document delivery steps
-- failure classification and notification throttle decision
-- Browserbase refresh dispatch status, GitHub target, and throttle state
-
-Example successful delta log shape:
-
-```json
-{
-  "event": "delta",
-  "status": "success",
-  "shows": 4,
-  "performances": 63,
-  "newPerformances": 0,
-  "steps": [
-    "read-cookie:success",
-    "touch-tdf-main-page:success",
-    "fetch-tdf-performances:success",
-    "persist-refreshed-cookie:success",
-    "read-seen-state:success",
-    "diff-offers:success",
-    "send-delta-alert:skipped",
-    "clear-auth-state:success"
-  ]
-}
-```
-
-## Scheduling
-
-Cloudflare Cron is configured in `wrangler.toml`:
-
-- `*/10 * * * *`: delta check every 10 minutes.
-- `0 13 * * *` and `0 14 * * *`: daily digest guard for 9am America/New_York.
-
-The two daily cron entries cover daylight saving time. The Worker sends only when New York local hour is actually `09`.
-
-## Operational Decisions
-
-### Why Cloudflare Worker instead of GitHub Actions for monitoring?
-
-Cloudflare already owns the Telegram webhook, the cookie form, KV state, and cron. Running the monitor there removes GitHub environment plumbing from the common path and keeps state close to the runtime.
-
-### Why keep one GitHub Action?
-
-Only because Cloudflare Workers cannot run Chromium. The remaining GitHub workflow is not a checker; it is a Browserbase refresh runner triggered only when the Worker detects auth failure.
-
-### Why touch the main page before JSON?
-
-The JSON endpoint returns the data but did not return refreshed cookies in testing. The main TDF page returned authenticated HTML and `Set-Cookie`. Touching the main page makes the session look active and gives us a chance to persist server-side cookie rotation.
-
-### Can we prevent cookie expiry forever?
-
-No. TDF can still invalidate a session server-side, rotate security state, or require a human challenge. The system minimizes expiry risk with authenticated activity and cookie merging, then recovers automatically when possible.
-
-### What happens if captcha appears?
-
-The Browserbase script stops. This is intentional. The system is captcha-resilient, not captcha-bypassing. It will log the failure and require manual refresh through `/cookie` or `npm run login:local`.
-
-## Setup
+## Local Development
 
 For a complete machine setup and recovery runbook, use [docs/startup-guide.md](docs/startup-guide.md).
 
@@ -197,192 +111,38 @@ Install dependencies:
 npm install
 ```
 
-Run tests:
+Run the full local gate:
 
 ```sh
 npm run quality
+```
+
+Useful focused commands:
+
+```sh
 npm test
 npm run worker:dry-run
+npm run smoke:worker
 ```
 
-Test Worker changes without deploying production:
-
-```sh
-npm run worker:dry-run
-```
-
-## CI And Deployment Isolation
-
-Pull requests run two required GitHub jobs before merge:
-
-- `pre-check`: `npm run quality`, which includes typecheck, lint, knip,
-  coverage-gated tests, and Wrangler dry-run.
-- `e2e`: deploys the isolated E2E Worker, logs into TDF with Browserbase, verifies
-  the saved cookie against TDF, and exercises noisy paths only against the E2E
-  Worker and test Telegram chat.
-
-The E2E job covers:
-
-- `/health`
-- `/cookie` GET and POST
-- `/verify-cookie`
-- `/run-delta`
-- `/run-daily`
-- `/debug`
-- `/logs`
-- Telegram `/status`
-- Telegram `/debug`
-- Telegram `/logs`
-- Telegram `/offers`
-- Browserbase refresh failure callback through `/refresh-failed` with the fake
-  CI failure alert suppressed
-
-The E2E job uses an isolated Cloudflare Worker and KV namespace:
-
-- production Worker and KV from `wrangler.toml`
-- E2E Worker and KV from `wrangler.e2e.toml`
-
-This project intentionally supports one deployment style: Cloudflare Workers
-with KV. Only replace the checked-in Wrangler resource names and namespace ids
-when creating a separate deployment.
-
-Production deploys are handled only by the `Deploy Worker` GitHub Actions
-workflow on `push` to protected `main`. The deploy workflow has no
-`workflow_dispatch` trigger. `npm run worker:deploy` refuses to run outside the
-GitHub Actions push-to-main workflow.
-
-Production smoke remains quiet. It only checks `/health`, `/debug`, and
-`/verify-cookie`; it does not run `/run-delta`, `/run-daily`, Telegram commands,
-or refresh-failure callbacks against production.
-
-## Required Secrets
-
-Cloudflare Worker secrets:
-
-```text
-TELEGRAM_BOT_TOKEN
-TELEGRAM_CHAT_ID
-COOKIE_FORM_TOKEN
-GITHUB_REFRESH_TOKEN
-```
-
-Cloudflare Worker vars:
-
-```text
-GITHUB_REPOSITORY=owner/repo
-GITHUB_REFRESH_REF=main
-```
-
-GitHub Actions secrets for the refresh workflow:
-
-```text
-BROWSERBASE_API_KEY
-BROWSERBASE_PROJECT_ID
-BROWSERBASE_CONTEXT_ID
-TDF_EMAIL
-TDF_PASSWORD
-COOKIE_FORM_TOKEN
-WORKER_BASE_URL
-```
-
-GitHub Actions secrets for PR E2E and production deploy:
-
-```text
-CLOUDFLARE_API_TOKEN
-CLOUDFLARE_ACCOUNT_ID
-E2E_BROWSERBASE_CONTEXT_ID
-E2E_COOKIE_FORM_TOKEN
-E2E_TELEGRAM_CHAT_ID
-E2E_WORKER_BASE_URL
-```
-
-Local `.env` for manual refresh/testing:
-
-```text
-COOKIE_FORM_TOKEN=
-WORKER_BASE_URL=https://your-worker.your-subdomain.workers.dev
-BROWSERBASE_API_KEY=
-BROWSERBASE_PROJECT_ID=
-BROWSERBASE_CONTEXT_ID=
-TDF_EMAIL=
-TDF_PASSWORD=
-```
-
-## Browserbase Refresh
-
-Run manually only when needed:
-
-```sh
-npm run login:browserbase
-```
-
-The script:
-
-- opens Browserbase headless with Playwright over CDP
-- logs into `https://my.tdf.org/account/login`
-- stops if TDF shows a captcha, access-denied page, or security challenge
-- verifies the performances endpoint
-- saves `TDF_COOKIE` to `.env`
-- updates Cloudflare KV by POSTing to the Worker cookie endpoint
-
-## Manual Fallback
-
-If Browserbase hits a human challenge:
+Manual refresh when Browserbase cannot solve the session:
 
 ```sh
 npm run install-browser
 npm run login:local
 ```
 
-Then paste the saved cookie with `/cookie`.
+## Documentation
 
-## Test Coverage
-
-The test suite covers:
-
-- TDF offer parsing and validation
-- first-run, repeated-run, and new-performance diffing
-- Telegram summary and details-file formatting
-- current digest formatting with no `NEW` markers
-- Worker happy path with main-page cookie refresh merge
-- auth failure dispatching one Browserbase refresh
-- repeated auth failure being throttled
-- final cookie verification endpoint with no Telegram side effects
-- debug snapshot endpoint
-- scheduled cron lock skip
-- stale-success health warning path
-- workflow isolation: PR quality, PR E2E, main-only deploy, no manual production deploy
+- [Startup Guide](docs/startup-guide.md): local setup, environment recovery, and deployment orientation.
+- [Architecture](docs/architecture.md): system flow, state model, recovery loop, and CI/E2E topology.
+- [Operations](docs/operations.md): secrets, manual recovery, smoke checks, and failure triage.
+- [Testing and Quality Gates](TESTING.md): local and CI verification contract.
+- [Telegram examples](docs/examples/telegram-offers.md): redacted message examples.
+- [Run log examples](docs/examples/run-log.md): redacted success and failure logs.
 
 ## Security Notes
 
-Keep these out of git:
+Never commit `.env`, exported cookies, logged-in screenshots, browser storage files, Telegram tokens, TDF credentials, Browserbase keys, GitHub refresh tokens, Cloudflare tokens, or real chat IDs.
 
-- `TDF_COOKIE`
-- `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_CHAT_ID`
-- `COOKIE_FORM_TOKEN`
-- `GITHUB_REFRESH_TOKEN`
-- `BROWSERBASE_API_KEY`
-- `BROWSERBASE_PROJECT_ID`
-- `BROWSERBASE_CONTEXT_ID`
-- `TDF_EMAIL`
-- `TDF_PASSWORD`
-- `CLOUDFLARE_API_TOKEN`
-- `CLOUDFLARE_ACCOUNT_ID`
-- `E2E_COOKIE_FORM_TOKEN`
-- `E2E_TELEGRAM_CHAT_ID`
-
-Never commit `.env`, exported cookies, logged-in screenshots, or browser storage files.
-
-## Current Status
-
-The deployed Worker has been end-to-end tested:
-
-- Cloudflare cron deploy works.
-- Main-page session touch succeeds.
-- Refreshed cookies are merged and persisted.
-- TDF JSON fetch returns current offers.
-- Telegram commands work.
-- `/debug` and `/verify-cookie` are deployed.
-- Automatic Browserbase refresh workflow succeeds.
-- A deliberately broken cookie triggered auth detection, refresh dispatch, Browserbase login, KV update, and restored normal checks after KV propagation.
+The repository examples intentionally use fake show names, fake run ids, and redacted secret values.
