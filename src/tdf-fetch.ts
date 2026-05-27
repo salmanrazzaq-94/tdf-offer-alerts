@@ -1,4 +1,5 @@
 import { parseTdfOffers, TDF_OFFERS_URL, TDF_PERFORMANCES_URL, type TdfOffer } from "./tdf.js";
+import type { OperationLogger } from "./observability.js";
 
 type TdfFetchErrorKind = "auth" | "transient" | "unexpected";
 
@@ -14,17 +15,37 @@ class TdfFetchError extends Error {
   }
 }
 
-export async function fetchTdfOffersWithCookie(cookie: string): Promise<TdfOffer[]> {
+export async function fetchTdfOffersWithCookie(
+  cookie: string,
+  logger?: OperationLogger
+): Promise<TdfOffer[]> {
   let lastError: unknown;
   const maxAttempts = 5;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await fetchTdfOffersOnce(cookie);
+      logger?.info("tdf-fetch-attempt:start", { attempt, maxAttempts });
+      const offers = await fetchTdfOffersOnce(cookie, logger, attempt);
+      logger?.info("tdf-fetch-attempt:success", {
+        attempt,
+        shows: offers.length,
+        performances: offers.reduce((total, offer) => total + offer.performances.length, 0)
+      });
+      return offers;
     } catch (error) {
       lastError = error;
+      logger?.warn("tdf-fetch-attempt:failure", {
+        attempt,
+        maxAttempts,
+        retryable: attempt < maxAttempts && isRetryableTdfError(error),
+        kind: error instanceof TdfFetchError ? error.kind : "unknown",
+        status: error instanceof TdfFetchError ? error.status : undefined,
+        message: error instanceof Error ? error.message : String(error)
+      });
       if (attempt < maxAttempts && isRetryableTdfError(error)) {
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(attempt)));
+        const waitMs = retryDelayMs(attempt);
+        logger?.info("tdf-fetch-retry-wait:start", { attempt, waitMs });
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
         continue;
       }
       throw error;
@@ -34,9 +55,14 @@ export async function fetchTdfOffersWithCookie(cookie: string): Promise<TdfOffer
   throw lastError;
 }
 
-async function fetchTdfOffersOnce(cookie: string): Promise<TdfOffer[]> {
-  await verifyAuthenticatedOffersPage(cookie);
+async function fetchTdfOffersOnce(
+  cookie: string,
+  logger: OperationLogger | undefined,
+  attempt: number
+): Promise<TdfOffer[]> {
+  await verifyAuthenticatedOffersPage(cookie, logger, attempt);
 
+  const started = Date.now();
   const response = await fetch(TDF_PERFORMANCES_URL, {
     headers: {
       Accept: "application/json, text/javascript, */*; q=0.01",
@@ -53,6 +79,13 @@ async function fetchTdfOffersOnce(cookie: string): Promise<TdfOffer[]> {
 
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
+  logger?.info("tdf-performances-response", {
+    attempt,
+    status: response.status,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started
+  });
 
   if (!response.ok) {
     throw new TdfFetchError(
@@ -73,7 +106,12 @@ async function fetchTdfOffersOnce(cookie: string): Promise<TdfOffer[]> {
   return parseTdfOffers(parsed);
 }
 
-async function verifyAuthenticatedOffersPage(cookie: string): Promise<void> {
+async function verifyAuthenticatedOffersPage(
+  cookie: string,
+  logger: OperationLogger | undefined,
+  attempt: number
+): Promise<void> {
+  const started = Date.now();
   const response = await fetch(TDF_OFFERS_URL, {
     headers: {
       Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -85,6 +123,13 @@ async function verifyAuthenticatedOffersPage(cookie: string): Promise<void> {
     signal: AbortSignal.timeout(60_000)
   });
   const body = await response.text();
+  logger?.info("tdf-offers-page-response", {
+    attempt,
+    status: response.status,
+    finalUrl: response.url,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started
+  });
 
   if (response.url.includes("/account/login") || response.url.includes("my.tdf.org/account")) {
     throw new TdfFetchError(
