@@ -75,3 +75,38 @@ export async function withFetch(
     globalThis.fetch = originalFetch;
   }
 }
+
+export async function captureRuntimeEvents(action: () => Promise<void>): Promise<Array<Record<string, unknown>>> {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  const originalWarn = console.warn;
+  const originalError = console.error;
+  const capture = (value?: unknown) => {
+    lines.push(String(value));
+  };
+  console.log = capture;
+  console.warn = capture;
+  console.error = capture;
+  try {
+    await action();
+  } finally {
+    console.log = originalLog;
+    console.warn = originalWarn;
+    console.error = originalError;
+  }
+  return lines.flatMap((line) => {
+    try {
+      return [JSON.parse(line) as Record<string, unknown>];
+    } catch {
+      return [];
+    }
+  });
+}
+
+export function lastRunEvent(events: Array<Record<string, unknown>>): Record<string, unknown> {
+  const event = events.filter((candidate) => candidate["event"] === "tdf-run-finished").at(-1);
+  if (!event) {
+    throw new Error("Expected a tdf-run-finished runtime event.");
+  }
+  return event;
+}

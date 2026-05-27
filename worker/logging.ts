@@ -1,45 +1,9 @@
-import { logsKey, maxLogs, runLogSchemaVersion, workerVersion } from "./constants.js";
-import type { Env, RunLog, RunStep } from "./types.js";
-import { errorMessage, sanitizeText, sanitizeUnknown } from "./utils.js";
+import { runLogSchemaVersion, workerVersion } from "./constants.js";
+import type { RunLog, RunStep } from "./types.js";
+import { sanitizeText, sanitizeUnknown } from "./utils.js";
 
-export async function readLogs(env: Env): Promise<RunLog[]> {
-  const raw = await env.TDF_ALERTS.get(logsKey);
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as RunLog[]) : [];
-  } catch (error) {
-    console.warn(JSON.stringify({
-      event: "tdf-run-log-read-recovered",
-      message: sanitizeText(errorMessage(error))
-    }));
-    return [];
-  }
-}
-
-export async function appendLog(env: Env, run: RunLog): Promise<void> {
+export function appendLog(run: RunLog): void {
   emitRunSummary(run);
-  if (!shouldPersistRunLog(run)) {
-    return;
-  }
-
-  try {
-    const logs = await readLogs(env);
-    logs.push(run);
-    await env.TDF_ALERTS.put(logsKey, JSON.stringify(logs.slice(-maxLogs), null, 2));
-  } catch (error) {
-    console.error(JSON.stringify({
-      event: "tdf-run-log-write-failure",
-      message: sanitizeText(errorMessage(error)),
-      run: summarizeRun(run)
-    }));
-  }
-}
-
-function shouldPersistRunLog(run: RunLog): boolean {
-  return run.status === "failure";
 }
 
 export function createRun(event: RunLog["event"], trigger: string): RunLog {
@@ -103,6 +67,9 @@ export function summarizeRun(run: RunLog): Record<string, unknown> {
     notificationSent: run.notificationSent,
     failureKind: run.failureKind,
     message: run.message ? sanitizeText(run.message) : undefined,
+    sourceRunId: run.sourceRunId ? sanitizeText(run.sourceRunId) : undefined,
+    externalRunUrl: run.externalRunUrl ? sanitizeText(run.externalRunUrl) : undefined,
+    environment: run.environment ? sanitizeText(run.environment) : undefined,
     steps: run.steps.length
   };
 }

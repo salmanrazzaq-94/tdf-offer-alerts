@@ -151,7 +151,7 @@ export async function recordBrowserbaseRefreshFailure(request: Request, env: Env
     message: reason,
     notificationSent: run.steps.some((step) => step.name === "send-browserbase-refresh-failed" && step.status === "success")
   });
-  await appendLog(env, run);
+  appendLog(run);
   return run;
 }
 

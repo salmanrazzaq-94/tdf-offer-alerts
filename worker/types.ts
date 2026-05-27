@@ -52,7 +52,7 @@ export type RunStep = {
 
 export type RunLog = {
   id: string;
-  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug" | "logs" | "refresh";
+  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "refresh";
   status: "success" | "failure" | "skipped";
   trigger: string;
   startedAt: string;
@@ -114,18 +114,4 @@ export type DebugSnapshot = {
   cookie: CookieMeta;
   auth: AuthState;
   health: HealthState;
-  lastSuccess: RunLog | null;
-  lastFailure: RunLog | null;
-  lastRun: RunLog | null;
-  recentRuns: Array<{
-    finishedAt: string;
-    event: RunLog["event"];
-    status: RunLog["status"];
-    trigger: string;
-    shows: number | undefined;
-    performances: number | undefined;
-    newPerformances: number | undefined;
-    failureKind: RunLog["failureKind"] | undefined;
-    message: string | undefined;
-  }>;
 };

@@ -1,20 +1,20 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { addStep, appendLog, createRun, finishRun, logRuntimeEvent, readLogs, summarizeRun } from "../worker/logging.js";
-import { MemoryKV, env } from "./worker-helpers.js";
+import { addStep, appendLog, createRun, finishRun, logRuntimeEvent, summarizeRun } from "../worker/logging.js";
+import { captureRuntimeEvents, lastRunEvent, MemoryKV } from "./worker-helpers.js";
 
 test("logging creates versioned runs, records steps, and redacts sensitive details", () => {
   const run = createRun("delta", "manual-http?token=secret");
 
   addStep(run, "request", "success", {
-    url: "https://worker.test/logs?token=secret",
+    url: "https://worker.test/cookie?token=secret",
     cookie: "TNEW=secret",
     nested: {
       password: "secret"
     }
   });
   finishRun(run, "failure", {
-    message: "failed at https://worker.test/logs?token=secret",
+    message: "failed at https://worker.test/cookie?token=secret",
     failureKind: "unexpected"
   });
 
@@ -22,25 +22,28 @@ test("logging creates versioned runs, records steps, and redacts sensitive detai
   assert.equal(run.status, "failure");
   assert.equal(run.steps[0]?.details?.["cookie"], "[redacted]");
   assert.deepEqual(run.steps[0]?.details?.["nested"], { password: "[redacted]" });
-  assert.equal(run.steps[0]?.details?.["url"], "https://worker.test/logs?token=[redacted]");
-  assert.equal(run.message, "failed at https://worker.test/logs?token=[redacted]");
+  assert.equal(run.steps[0]?.details?.["url"], "https://worker.test/cookie?token=[redacted]");
+  assert.equal(run.message, "failed at https://worker.test/cookie?token=[redacted]");
 });
 
-test("appendLog persists failed runs and recovers corrupted RUN_LOGS state", async () => {
+test("appendLog emits failed runs to runtime logs", async () => {
   const kv = new MemoryKV();
-  await kv.put("RUN_LOGS", "{not-json");
-  const run = createRun("logs", "test");
+  const run = createRun("delta", "test");
   finishRun(run, "failure", {
     failureKind: "unexpected",
     message: "test failure"
   });
 
-  await appendLog(env(kv), run);
+  const events = await captureRuntimeEvents(async () => {
+    appendLog(run);
+  });
 
-  const logs = await readLogs(env(kv));
-  assert.equal(logs.length, 1);
-  assert.equal(logs[0]?.event, "logs");
-  assert.equal(logs[0]?.status, "failure");
+  const entry = lastRunEvent(events);
+  const summary = entry["run"] as { event?: string; status?: string; message?: string };
+  assert.equal(summary.event, "delta");
+  assert.equal(summary.status, "failure");
+  assert.equal(summary.message, "test failure");
+  assert.deepEqual(kv.writes, []);
 });
 
 test("appendLog emits successful runs to runtime logs without writing KV", async () => {
@@ -48,9 +51,14 @@ test("appendLog emits successful runs to runtime logs without writing KV", async
   const run = createRun("delta", "test");
   finishRun(run, "success");
 
-  await appendLog(env(kv), run);
+  const events = await captureRuntimeEvents(async () => {
+    appendLog(run);
+  });
 
-  assert.equal(kv.values.get("RUN_LOGS"), undefined);
+  const summary = lastRunEvent(events)["run"] as { event?: string; status?: string };
+  assert.equal(summary.event, "delta");
+  assert.equal(summary.status, "success");
+  assert.deepEqual(kv.writes, []);
 });
 
 test("summarizeRun omits step detail payloads but keeps operational counters", () => {
@@ -74,6 +82,9 @@ test("summarizeRun omits step detail payloads but keeps operational counters", (
     notificationSent: true,
     failureKind: undefined,
     message: undefined,
+    sourceRunId: undefined,
+    externalRunUrl: undefined,
+    environment: undefined,
     steps: 1
   });
 });
@@ -86,8 +97,8 @@ test("runtime events are structured and redact tokenized URLs", () => {
   };
   try {
     logRuntimeEvent("info", "worker-request-received", {
-      path: "/logs",
-      url: "https://worker.test/logs?token=secret"
+      path: "/cookie",
+      url: "https://worker.test/cookie?token=secret"
     });
   } finally {
     console.log = originalLog;
@@ -95,6 +106,6 @@ test("runtime events are structured and redact tokenized URLs", () => {
 
   const entry = JSON.parse(lines[0] ?? "{}") as { event?: string; url?: string; at?: string };
   assert.equal(entry.event, "worker-request-received");
-  assert.equal(entry.url, "https://worker.test/logs?token=[redacted]");
+  assert.equal(entry.url, "https://worker.test/cookie?token=[redacted]");
   assert.equal(typeof entry.at, "string");
 });

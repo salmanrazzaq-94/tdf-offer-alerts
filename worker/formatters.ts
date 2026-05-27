@@ -43,14 +43,14 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
 }
 
 export function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {
-  const lastFailure = snapshot.lastFailure
-    ? `${snapshot.lastFailure.finishedAt} (${snapshot.lastFailure.failureKind ?? "unknown"})`
+  const lastFailure = snapshot.auth.lastFailureKind
+    ? `${snapshot.auth.lastFailureKind}: ${snapshot.auth.lastFailureReason ?? "unknown"}`
     : "none";
   return [
     "<b>TDF Status</b>",
     `Cookie works now. ${offers.length} shows, ${countPerformances(offers)} performances available.`,
     `Cookie saved: ${snapshot.cookie.savedAt ?? "unknown"} (${snapshot.cookie.source ?? "unknown source"})`,
-    `Last success: ${snapshot.health.lastDeltaSuccessAt ?? snapshot.lastSuccess?.finishedAt ?? "none"}`,
+    `Last success: ${snapshot.health.lastDeltaSuccessAt ?? "none"}`,
     `Last failure: ${escapeHtml(lastFailure)}`,
     `Browserbase refresh attempted: ${snapshot.auth.lastRefreshAttemptedAt ?? "none"}`,
     `Worker: ${escapeHtml(snapshot.version)}`

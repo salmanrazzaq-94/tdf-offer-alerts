@@ -34,7 +34,7 @@ export async function runCommandOffers(env: Env): Promise<void> {
   } catch (error) {
     await handleCheckFailure(env, run, error);
   }
-  await appendLog(env, run);
+  appendLog(run);
 }
 
 export async function runStatus(env: Env): Promise<void> {
@@ -64,5 +64,5 @@ export async function runStatus(env: Env): Promise<void> {
   } catch (error) {
     await handleCheckFailure(env, run, error);
   }
-  await appendLog(env, run);
+  appendLog(run);
 }

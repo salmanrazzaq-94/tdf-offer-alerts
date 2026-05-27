@@ -110,10 +110,8 @@ Then send `/cookie` to the Telegram bot and paste the saved cookie into the priv
 | `auth.lastFailureKind` | Last classified failure, if any |
 | `auth.lastRefreshAttemptStatus` | Browserbase dispatch state: `started`, `throttled`, `dispatch-failed`, or config fallback |
 | `health.lastDeltaSuccessAt` | Last persisted successful delta timestamp |
-| `lastFailure` | Last failed Worker run persisted as a failure breadcrumb |
-| `recentRuns` | Compact persisted failure breadcrumbs and any legacy run entries |
 
-Use Cloudflare Workers Logs for routine successful run details. Use `/logs?token=...` only when you need persisted failure breadcrumbs from KV.
+Use Cloudflare Workers Logs for run summaries, step failures, and request-level diagnostics. KV is reserved for product state that the Worker needs to keep running.
 
 ## Common Incidents
 
@@ -121,7 +119,7 @@ Use Cloudflare Workers Logs for routine successful run details. Use `/logs?token
 |---|---|---|
 | No Telegram alerts | Workers Logs and `/debug` | Confirm delta checks are succeeding and `newPerformances` is actually nonzero |
 | Cookie expired | `auth.lastFailureKind = auth` | Wait for Browserbase dispatch or run `npm run login:browserbase` |
-| Browserbase failed | Telegram refresh-failure alert, Workers Logs, or `/logs` failure breadcrumb | If challenge/captcha appears, use `npm run login:local` and `/cookie` |
+| Browserbase failed | Telegram refresh-failure alert or Workers Logs | If challenge/captcha appears, use `npm run login:local` and `/cookie` |
 | TDF is down or rate limited | failure kind `transient` | Let scheduled retries continue unless failures persist |
 | Telegram document failed | run step `send-telegram-document:failure` | Summary still sent; inspect Telegram/API status before retrying |
 | Corrupted KV state | run step shows recovered state | Let the next successful run rewrite the recovered key |

@@ -95,7 +95,6 @@ Private HTTP endpoints are guarded by `COOKIE_FORM_TOKEN`.
 | `/run-daily?token=...` | Send the current digest now |
 | `/verify-cookie?token=...` | Validate the saved cookie without sending Telegram |
 | `/debug?token=...` | Operator snapshot for cookie, auth, health, and failure state |
-| `/logs?token=...` | Operator JSON for persisted failure breadcrumbs |
 | `/cookie?token=...` | Paste and validate a fresh cookie |
 
 Sanitized examples: [Telegram messages](docs/examples/telegram-offers.md) and [run logs](docs/examples/run-log.md).

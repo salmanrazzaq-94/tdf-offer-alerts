@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleTelegram, sendMessage } from "../worker/telegram.js";
-import { MemoryKV, env, response, sampleOffers, withFetch } from "./worker-helpers.js";
+import { captureRuntimeEvents, lastRunEvent, MemoryKV, env, response, sampleOffers, withFetch } from "./worker-helpers.js";
 
 test("unauthorized Telegram chats are ignored without writing KV", async () => {
   const kv = new MemoryKV();
@@ -17,7 +17,6 @@ test("unauthorized Telegram chats are ignored without writing KV", async () => {
     }, env(kv), "https://worker.test/telegram");
   });
 
-  assert.equal(kv.values.get("RUN_LOGS"), undefined);
   assert.deepEqual(kv.writes, []);
 });
 
@@ -35,7 +34,6 @@ test("unknown authorized Telegram commands are ignored without writing KV", asyn
     }, env(kv), "https://worker.test/telegram");
   });
 
-  assert.equal(kv.values.get("RUN_LOGS"), undefined);
   assert.deepEqual(kv.writes, []);
 });
 
@@ -56,60 +54,64 @@ test("help command sends the reduced command list without writing KV on success"
   });
 
   assert.match(bodies.join("\n"), /Commands: \/offers/);
-  assert.doesNotMatch(bodies.join("\n"), /\/debug|\/logs/);
-  assert.equal(kv.values.get("RUN_LOGS"), undefined);
+  assert.doesNotMatch(bodies.join("\n"), /\/debug/);
+  assert.deepEqual(kv.writes, []);
 });
 
 test("help command logs Telegram response failures", async () => {
   const kv = new MemoryKV();
 
-  await withFetch(async () => response("telegram down", { status: 500 }), async () => {
+  const events = await captureRuntimeEvents(() => withFetch(async () => response("telegram down", { status: 500 }), async () => {
     await handleTelegram({
       message: {
         text: "/help",
         chat: { id: 123 }
       }
     }, env(kv), "https://worker.test/telegram");
-  });
+  }));
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+  const event = lastRunEvent(events);
+  const run = event["run"] as {
     trigger: string;
     status: string;
-    steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
-  }>;
-  const run = logs.at(-1);
-  assert.equal(run?.trigger, "telegram:/help");
-  assert.equal(run?.status, "failure");
-  const sendStep = run?.steps.find((step) => step.name === "send-telegram-message");
+  };
+  const stepSummaries = event["stepSummaries"] as Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+  assert.equal(run.trigger, "telegram:/help");
+  assert.equal(run.status, "failure");
+  const sendStep = stepSummaries.find((step) => step.name === "send-telegram-message");
   assert.equal(sendStep?.status, "failure");
   assert.match(String(sendStep?.details?.["message"]), /telegram down/);
+  assert.deepEqual(kv.writes, []);
 });
 
 test("offers command sends Telegram messages without writing success logs to KV", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  kv.writes.length = 0;
 
   await withFetch(tdfAndTelegramFetch(), () => runTelegramCommand(kv, "/offers"));
 
-  assert.equal(kv.values.get("RUN_LOGS"), undefined);
+  assert.deepEqual(kv.writes, []);
 });
 
 test("status command logs Telegram send failures as command failures", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
 
-  await withFetch(tdfAndTelegramFetch(500, "telegram down"), () => runTelegramCommand(kv, "/status"));
+  const events = await captureRuntimeEvents(() =>
+    withFetch(tdfAndTelegramFetch(500, "telegram down"), () => runTelegramCommand(kv, "/status"))
+  );
 
-  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+  const event = lastRunEvent(events);
+  const run = event["run"] as {
     trigger: string;
     status: string;
-    steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
-  }>;
-  const run = logs.at(-1);
-  assert.equal(run?.trigger, "telegram:/status");
-  assert.equal(run?.status, "failure");
-  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-status:failure"));
-  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-failure:failure"));
+  };
+  const stepSummaries = event["stepSummaries"] as Array<{ name: string; status: string }>;
+  assert.equal(run.trigger, "telegram:/status");
+  assert.equal(run.status, "failure");
+  assert.ok(stepSummaries.some((step) => `${step.name}:${step.status}` === "send-telegram-status:failure"));
+  assert.ok(stepSummaries.some((step) => `${step.name}:${step.status}` === "send-telegram-failure:failure"));
 });
 
 test("sendMessage surfaces Telegram API response bodies on failure", async () => {

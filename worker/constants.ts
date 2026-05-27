@@ -1,7 +1,6 @@
 export const cookieKey = "TDF_COOKIE";
 export const cookieMetaKey = "TDF_COOKIE_META";
 export const seenKey = "SEEN_OFFERS";
-export const logsKey = "RUN_LOGS";
 export const authStateKey = "AUTH_STATE";
 export const healthStateKey = "HEALTH_STATE";
 export const deltaLockKey = "DELTA_LOCK";
@@ -14,5 +13,4 @@ export const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
 export const browserbaseDispatchFailureRetryMs = 30 * 60 * 1000;
 export const staleSuccessAlertAfterMs = 30 * 60 * 1000;
 export const deltaLockTtlMs = 8 * 60 * 1000;
-export const maxLogs = 200;
 export const runLogSchemaVersion = 1;
