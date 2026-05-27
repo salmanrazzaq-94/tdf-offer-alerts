@@ -103,6 +103,7 @@ test("e2e worker uses isolated Cloudflare resources", () => {
   assert.match(e2eWranglerConfig, /id = "663fc62f616f4b22a232d75be8607ad5"/);
   assert.doesNotMatch(e2eWranglerConfig, /\[triggers\]/);
   assert.doesNotMatch(e2eWranglerConfig, /565f5f3899a547439f1ce155e9947971/);
+  assert.doesNotMatch(preCheckWorkflow, /GITHUB_REFRESH_TOKEN:\s*"e2e-disabled"/);
 });
 
 test("e2e script verifies worker endpoints and telegram delivery paths", () => {

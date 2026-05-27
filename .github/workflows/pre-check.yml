@@ -54,8 +54,7 @@ jobs:
           const values = {
             TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
             TELEGRAM_CHAT_ID: process.env.E2E_TELEGRAM_CHAT_ID,
-            COOKIE_FORM_TOKEN: process.env.E2E_COOKIE_FORM_TOKEN,
-            GITHUB_REFRESH_TOKEN: "e2e-disabled"
+            COOKIE_FORM_TOKEN: process.env.E2E_COOKIE_FORM_TOKEN
           };
           const missing = Object.entries(values)
             .filter(([, value]) => !value)
