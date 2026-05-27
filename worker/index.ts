@@ -200,10 +200,10 @@ export default {
         return new Response("Not found", { status: 404 });
       }
       const form = await request.formData();
-      const cookieValue = form.get("cookie");
-      const cookie = normalizeCookie(typeof cookieValue === "string" ? cookieValue : "");
       const run = createRun("cookie", "cookie-form");
       try {
+        const cookieValue = form.get("cookie");
+        const cookie = normalizeCookie(typeof cookieValue === "string" ? cookieValue : "");
         const result = await fetchTdfOffers(cookie, run);
         await saveCookie(env, result.cookie, "cookie-form", run);
         await clearAuthState(env, run);
@@ -534,8 +534,15 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
 
   if (notifyNow) {
     const sendStarted = Date.now();
-    await sendMessage(env, formatFailureMessage(kind, message, refreshResult));
-    addStep(run, "send-telegram-failure", "success", { durationMs: Date.now() - sendStarted });
+    try {
+      await sendMessage(env, formatFailureMessage(kind, message, refreshResult));
+      addStep(run, "send-telegram-failure", "success", { durationMs: Date.now() - sendStarted });
+    } catch (notifyError) {
+      addStep(run, "send-telegram-failure", "failure", {
+        durationMs: Date.now() - sendStarted,
+        message: errorMessage(notifyError)
+      });
+    }
   } else {
     addStep(run, "send-telegram-failure", "skipped", {
       reason: suppressNotification
@@ -547,7 +554,7 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
   finishRun(run, "failure", {
     failureKind: kind,
     message,
-    notificationSent: notifyNow
+    notificationSent: run.steps.some((step) => step.name === "send-telegram-failure" && step.status === "success")
   });
 }
 
@@ -886,8 +893,16 @@ async function sendOfferNotification(
   caption: string
 ): Promise<boolean> {
   const sendStarted = Date.now();
-  await sendMessage(env, formatSummary(offers, items));
-  addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
+  try {
+    await sendMessage(env, formatSummary(offers, items));
+    addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
+  } catch (error) {
+    addStep(run, "send-telegram-summary", "failure", {
+      durationMs: Date.now() - sendStarted,
+      message: errorMessage(error)
+    });
+    throw error;
+  }
 
   const documentStarted = Date.now();
   try {
@@ -1079,7 +1094,17 @@ async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquired: bool
   const started = Date.now();
   const raw = await env.TDF_ALERTS.get(deltaLockKey);
   if (raw) {
-    const lock = JSON.parse(raw) as { owner?: string; acquiredAt?: string };
+    let lock: { owner?: string; acquiredAt?: string };
+    try {
+      lock = JSON.parse(raw) as { owner?: string; acquiredAt?: string };
+    } catch (error) {
+      addStep(run, "read-delta-lock", "failure", {
+        durationMs: Date.now() - started,
+        message: errorMessage(error),
+        recovered: true
+      });
+      lock = {};
+    }
     const acquiredAt = lock.acquiredAt ? new Date(lock.acquiredAt).valueOf() : 0;
     if (acquiredAt && Date.now() - acquiredAt < deltaLockTtlMs) {
       addStep(run, "acquire-delta-lock", "skipped", {
