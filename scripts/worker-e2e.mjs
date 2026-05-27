@@ -65,7 +65,10 @@ const refreshFailureRun = await postRefreshFailure();
 if (refreshFailureRun.status !== "failure" || refreshFailureRun.failureKind !== "auth") {
   throw new Error(`refresh-failed did not record the expected auth failure: ${JSON.stringify(refreshFailureRun)}`);
 }
-assertStepSucceeded(refreshFailureRun, "send-browserbase-refresh-failed");
+assertStepSkipped(refreshFailureRun, "send-browserbase-refresh-failed");
+if (refreshFailureRun.notificationSent !== false) {
+  throw new Error(`refresh-failed should suppress the fake CI alert: ${JSON.stringify(refreshFailureRun)}`);
+}
 
 console.log(JSON.stringify({
   ok: true,
@@ -89,7 +92,7 @@ console.log(JSON.stringify({
     logs: logsRun.status,
     offers: offersRun.status
   },
-  refreshFailure: refreshFailureRun.status
+  refreshFailure: "suppressed"
 }, null, 2));
 
 function required(name) {
@@ -142,11 +145,12 @@ async function postCookie(cookie) {
 }
 
 async function postRefreshFailure() {
-  const reason = `CI E2E refresh failure callback ${Date.now()}`;
+  const reason = "CI E2E refresh failure callback; expected test path, not a production incident.";
   const response = await fetch(`${baseUrl}/refresh-failed?token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
+      notify: "false",
       reason,
       source_run_id: `ci-e2e-${Date.now()}`
     })
@@ -225,6 +229,13 @@ function assertStepSucceeded(run, stepName) {
   const step = run.steps?.find((candidate) => candidate.name === stepName);
   if (!step || step.status !== "success") {
     throw new Error(`${stepName} did not succeed: ${JSON.stringify(run)}`);
+  }
+}
+
+function assertStepSkipped(run, stepName) {
+  const step = run.steps?.find((candidate) => candidate.name === stepName);
+  if (!step || step.status !== "skipped") {
+    throw new Error(`${stepName} did not skip: ${JSON.stringify(run)}`);
   }
 }
 

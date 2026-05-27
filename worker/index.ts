@@ -563,15 +563,17 @@ async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Prom
   const details = await readRefreshFailureDetails(request);
   const reason = details["reason"] || "Browserbase refresh workflow failed.";
   const sourceRunId = details["source_run_id"] || details["sourceRunId"];
+  const suppressNotification = isTruthy(details["suppress_telegram"]) || details["notify"] === "false";
   const state = await readAuthState(env);
   const lastNotifiedAt = state.lastFailureNotifiedAt
     ? new Date(state.lastFailureNotifiedAt).valueOf()
     : 0;
   const shouldNotify =
-    state.lastFailureKind !== "auth" ||
-    state.lastFailureReason !== reason ||
-    !lastNotifiedAt ||
-    Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs;
+    !suppressNotification &&
+    (state.lastFailureKind !== "auth" ||
+      state.lastFailureReason !== reason ||
+      !lastNotifiedAt ||
+      Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs);
 
   await env.TDF_ALERTS.put(
     authStateKey,
@@ -584,7 +586,12 @@ async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Prom
     } satisfies AuthState)
   );
 
-  if (shouldNotify) {
+  if (suppressNotification) {
+    addStep(run, "send-browserbase-refresh-failed", "skipped", {
+      reason: "Notification suppressed by refresh failure request.",
+      sourceRunId
+    });
+  } else if (shouldNotify) {
     const sendStarted = Date.now();
     await sendMessage(
       env,
@@ -617,6 +624,10 @@ async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Prom
   });
   await appendLog(env, run);
   return run;
+}
+
+function isTruthy(value: string | undefined): boolean {
+  return value === "true" || value === "1" || value === "yes";
 }
 
 async function readRefreshFailureDetails(request: Request): Promise<Record<string, string>> {
