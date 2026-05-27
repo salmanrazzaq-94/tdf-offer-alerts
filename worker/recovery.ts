@@ -101,22 +101,30 @@ export async function recordBrowserbaseRefreshFailure(request: Request, env: Env
     });
   } else if (shouldNotify) {
     const sendStarted = Date.now();
-    await sendMessage(
-      env,
-      [
-        "<b>Browserbase refresh failed</b>",
-        "Automatic TDF login recovery did not complete.",
-        escapeHtml(reason),
-        sourceRunId ? `source=${escapeHtml(sourceRunId)}` : "",
-        "Send /cookie to paste a fresh TDF cookie."
-      ]
-        .filter(Boolean)
-        .join("\n")
-    );
-    addStep(run, "send-browserbase-refresh-failed", "success", {
-      durationMs: Date.now() - sendStarted,
-      sourceRunId
-    });
+    try {
+      await sendMessage(
+        env,
+        [
+          "<b>Browserbase refresh failed</b>",
+          "Automatic TDF login recovery did not complete.",
+          escapeHtml(reason),
+          sourceRunId ? `source=${escapeHtml(sourceRunId)}` : "",
+          "Send /cookie to paste a fresh TDF cookie."
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+      addStep(run, "send-browserbase-refresh-failed", "success", {
+        durationMs: Date.now() - sendStarted,
+        sourceRunId
+      });
+    } catch (error) {
+      addStep(run, "send-browserbase-refresh-failed", "failure", {
+        durationMs: Date.now() - sendStarted,
+        sourceRunId,
+        message: errorMessage(error)
+      });
+    }
   } else {
     addStep(run, "send-browserbase-refresh-failed", "skipped", {
       reason: "Repeated Browserbase failure notification is throttled.",
@@ -128,7 +136,7 @@ export async function recordBrowserbaseRefreshFailure(request: Request, env: Env
   finishRun(run, "failure", {
     failureKind: "auth",
     message: reason,
-    notificationSent: shouldNotify
+    notificationSent: run.steps.some((step) => step.name === "send-browserbase-refresh-failed" && step.status === "success")
   });
   await appendLog(env, run);
   return run;

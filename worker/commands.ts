@@ -45,8 +45,16 @@ export async function runStatus(env: Env): Promise<void> {
     await persistRefreshedCookie(env, cookie, result.cookie, run);
     const snapshot = await buildDebugSnapshot(env);
     const sendStarted = Date.now();
-    await sendMessage(env, formatStatus(snapshot, result.offers));
-    addStep(run, "send-telegram-status", "success", { durationMs: Date.now() - sendStarted });
+    try {
+      await sendMessage(env, formatStatus(snapshot, result.offers));
+      addStep(run, "send-telegram-status", "success", { durationMs: Date.now() - sendStarted });
+    } catch (error) {
+      addStep(run, "send-telegram-status", "failure", {
+        durationMs: Date.now() - sendStarted,
+        message: errorMessage(error)
+      });
+      throw error;
+    }
     await clearAuthState(env, run);
     finishRun(run, "success", {
       shows: result.offers.length,
@@ -63,8 +71,17 @@ export async function runDebug(env: Env): Promise<void> {
   const run = createRun("debug", "telegram:/debug");
   try {
     const snapshot = await buildDebugSnapshot(env);
-    await sendMessage(env, formatDebug(snapshot));
-    addStep(run, "send-telegram-debug", "success");
+    const sendStarted = Date.now();
+    try {
+      await sendMessage(env, formatDebug(snapshot));
+      addStep(run, "send-telegram-debug", "success", { durationMs: Date.now() - sendStarted });
+    } catch (error) {
+      addStep(run, "send-telegram-debug", "failure", {
+        durationMs: Date.now() - sendStarted,
+        message: errorMessage(error)
+      });
+      throw error;
+    }
     finishRun(run, "success", {
       notificationSent: true,
       message: "Debug snapshot sent."
@@ -83,8 +100,16 @@ export async function runLogs(env: Env): Promise<void> {
   const logs = await readLogs(env);
   try {
     const sendStarted = Date.now();
-    await sendMessage(env, formatLogs(logs.slice(-8)));
-    addStep(run, "send-telegram-logs", "success", { durationMs: Date.now() - sendStarted });
+    try {
+      await sendMessage(env, formatLogs(logs.slice(-8)));
+      addStep(run, "send-telegram-logs", "success", { durationMs: Date.now() - sendStarted });
+    } catch (error) {
+      addStep(run, "send-telegram-logs", "failure", {
+        durationMs: Date.now() - sendStarted,
+        message: errorMessage(error)
+      });
+      throw error;
+    }
     finishRun(run, "success", {
       notificationSent: true,
       message: `Sent ${Math.min(logs.length, 8)} recent run logs.`

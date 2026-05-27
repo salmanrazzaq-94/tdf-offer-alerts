@@ -1,7 +1,7 @@
 import { tdfMemberHomeUrl, tdfOffersUrl, tdfPerformancesUrl } from "./constants.js";
 import { addStep } from "./logging.js";
 import type { AlertItem, RunLog, TdfFetchResult, TdfOffer } from "./types.js";
-import { classifyStatus, getSetCookieHeaders, isRecord, looksLikeAuthFailure, TdfError } from "./utils.js";
+import { classifyStatus, errorMessage, getSetCookieHeaders, isRecord, looksLikeAuthFailure, TdfError } from "./utils.js";
 
 export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFetchResult> {
   let activeCookie = await refreshTdfMemberSession(cookie, run);
@@ -47,8 +47,18 @@ export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFe
         );
       }
 
-      const parsed = JSON.parse(body) as unknown;
-      const offers = parseOffers(parsed);
+      let offers: TdfOffer[];
+      try {
+        const parsed = JSON.parse(body) as unknown;
+        offers = parseOffers(parsed);
+      } catch (error) {
+        addStep(run, "fetch-tdf-performances", "failure", {
+          ...details,
+          message: errorMessage(error),
+          bodyPreview: body.slice(0, 200)
+        });
+        throw error;
+      }
       addStep(run, "fetch-tdf-performances", "success", {
         ...details,
         shows: offers.length,

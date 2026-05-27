@@ -21,9 +21,12 @@ import { classifyError, errorMessage, escapeHtml } from "./utils.js";
 export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
   const run = createRun("delta", trigger);
   let notificationSent = false;
-  const lock = trigger.startsWith("cron:") ? await acquireDeltaLock(env, run) : { acquired: true };
+  let lock = { acquired: !trigger.startsWith("cron:"), owner: "manual" };
 
   try {
+    if (trigger.startsWith("cron:")) {
+      lock = await acquireDeltaLock(env, run);
+    }
     if (!lock.acquired) {
       finishRun(run, "skipped", {
         message: "Another recent delta check is already running."
@@ -80,7 +83,20 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
     await handleCheckFailure(env, run, error);
   } finally {
     if (lock.acquired && trigger.startsWith("cron:")) {
-      await releaseDeltaLock(env, run);
+      try {
+        await releaseDeltaLock(env, run);
+      } catch (error) {
+        addStep(run, "release-delta-lock", "failure", {
+          message: errorMessage(error)
+        });
+        if (run.status === "success") {
+          finishRun(run, "failure", {
+            failureKind: "unexpected",
+            message: `Failed to release delta lock: ${errorMessage(error)}`,
+            notificationSent
+          });
+        }
+      }
     }
   }
 

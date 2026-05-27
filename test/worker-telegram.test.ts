@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleTelegram, sendMessage } from "../worker/telegram.js";
-import { MemoryKV, env, response, withFetch } from "./worker-helpers.js";
+import { MemoryKV, env, response, sampleOffers, withFetch } from "./worker-helpers.js";
 
 test("unauthorized Telegram chats are ignored with a sanitized ingress log", async () => {
   const kv = new MemoryKV();
@@ -63,6 +63,69 @@ test("help command logs ingress and sends the command list", async () => {
   assert.equal(logs.at(-1)?.status, "success");
 });
 
+test("help command logs Telegram response failures", async () => {
+  const kv = new MemoryKV();
+
+  await withFetch(async () => response("telegram down", { status: 500 }), async () => {
+    await handleTelegram({
+      message: {
+        text: "/help",
+        chat: { id: 123 }
+      }
+    }, env(kv), "https://worker.test/telegram");
+  });
+
+  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+    trigger: string;
+    status: string;
+    steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+  }>;
+  const run = logs.at(-1);
+  assert.equal(run?.trigger, "telegram:/help");
+  assert.equal(run?.status, "failure");
+  const sendStep = run?.steps.find((step) => step.name === "send-telegram-message");
+  assert.equal(sendStep?.status, "failure");
+  assert.match(String(sendStep?.details?.["message"]), /telegram down/);
+});
+
+test("offers command logs successful Telegram command runs", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+
+  await withFetch(tdfAndTelegramFetch(), () => runTelegramCommand(kv, "/offers"));
+
+  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+    event: string;
+    trigger: string;
+    status: string;
+    steps: Array<{ name: string; status: string }>;
+  }>;
+  const run = logs.at(-1);
+  assert.equal(run?.event, "command");
+  assert.equal(run?.trigger, "telegram:/offers");
+  assert.equal(run?.status, "success");
+  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-summary:success"));
+  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:success"));
+});
+
+test("status command logs Telegram send failures as command failures", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+
+  await withFetch(tdfAndTelegramFetch(500, "telegram down"), () => runTelegramCommand(kv, "/status"));
+
+  const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+    trigger: string;
+    status: string;
+    steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+  }>;
+  const run = logs.at(-1);
+  assert.equal(run?.trigger, "telegram:/status");
+  assert.equal(run?.status, "failure");
+  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-status:failure"));
+  assert.ok(run?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-failure:failure"));
+});
+
 test("sendMessage surfaces Telegram API response bodies on failure", async () => {
   await withFetch(async () => response("telegram down", { status: 500 }), async () => {
     await assert.rejects(
@@ -71,3 +134,43 @@ test("sendMessage surfaces Telegram API response bodies on failure", async () =>
     );
   });
 });
+
+function runTelegramCommand(kv: MemoryKV, text: string): Promise<void> {
+  return handleTelegram({
+    message: {
+      text,
+      chat: { id: 123 }
+    }
+  }, env(kv), "https://worker.test/telegram");
+}
+
+function tdfAndTelegramFetch(telegramStatus = 200, telegramBody = "{\"ok\":true}"): typeof fetch {
+  return async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    if (url.includes("api.telegram.org")) {
+      return response(telegramBody, { status: telegramStatus, url });
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  };
+}
