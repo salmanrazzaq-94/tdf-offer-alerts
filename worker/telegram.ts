@@ -6,7 +6,7 @@ import {
   runStatus
 } from "./commands.js";
 import type { Env, TelegramUpdate } from "./types.js";
-import { errorMessage, sanitizeUnknown, TdfError } from "./utils.js";
+import { classifyError, errorMessage, sanitizeUnknown, TdfError } from "./utils.js";
 
 export async function handleTelegram(update: TelegramUpdate, env: Env, requestUrl: string): Promise<void> {
   const message = update.message;
@@ -29,8 +29,12 @@ export async function handleTelegram(update: TelegramUpdate, env: Env, requestUr
   if (text === "/cookie" || text === "/cookie@tdf_alert_watcher_bot") {
     const url = new URL("/cookie", requestUrl);
     url.searchParams.set("token", env.COOKIE_FORM_TOKEN);
-    await recordTelegramIngress(env, "telegram:/cookie", "success", { command: "/cookie" });
-    await sendMessage(env, `Paste a fresh TDF cookie here:\n${url.toString()}`);
+    await runTelegramMessageCommand(
+      env,
+      "telegram:/cookie",
+      { command: "/cookie" },
+      `Paste a fresh TDF cookie here:\n${url.toString()}`
+    );
     return;
   }
 
@@ -55,8 +59,12 @@ export async function handleTelegram(update: TelegramUpdate, env: Env, requestUr
   }
 
   if (text === "/help" || text === "/start") {
-    await recordTelegramIngress(env, "telegram:/help", "success", { command: text });
-    await sendMessage(env, "Commands: /offers, /status, /debug, /logs, /cookie");
+    await runTelegramMessageCommand(
+      env,
+      "telegram:/help",
+      { command: text },
+      "Commands: /offers, /status, /debug, /logs, /cookie"
+    );
     return;
   }
 
@@ -110,6 +118,41 @@ async function recordTelegramIngress(
   await appendLog(env, run).catch((error: unknown) => {
     console.error(JSON.stringify({
       event: "tdf-telegram-ingress-log-failed",
+      message: errorMessage(error)
+    }));
+  });
+}
+
+async function runTelegramMessageCommand(
+  env: Env,
+  trigger: string,
+  details: Record<string, unknown>,
+  message: string
+): Promise<void> {
+  const run = createRun("command", trigger);
+  addStep(run, "telegram-ingress", "success", sanitizeUnknown(details) as Record<string, unknown>);
+  const sendStarted = Date.now();
+  try {
+    await sendMessage(env, message);
+    addStep(run, "send-telegram-message", "success", { durationMs: Date.now() - sendStarted });
+    finishRun(run, "success", {
+      message: "Telegram command response sent.",
+      notificationSent: true
+    });
+  } catch (error) {
+    addStep(run, "send-telegram-message", "failure", {
+      durationMs: Date.now() - sendStarted,
+      message: errorMessage(error)
+    });
+    finishRun(run, "failure", {
+      failureKind: classifyError(error),
+      message: errorMessage(error),
+      notificationSent: false
+    });
+  }
+  await appendLog(env, run).catch((error: unknown) => {
+    console.error(JSON.stringify({
+      event: "tdf-telegram-command-log-failed",
       message: errorMessage(error)
     }));
   });

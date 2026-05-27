@@ -1455,6 +1455,66 @@ test("cron delta skips when a recent lock is present", async () => {
   }
 });
 
+test("cron delta persists a run log when lock release fails", async () => {
+  class ReleaseFailureKV extends MemoryKV {
+    async delete(key: string): Promise<void> {
+      if (key === "DELTA_LOCK") {
+        throw new Error("KV delete failed");
+      }
+      await super.delete(key);
+    }
+  }
+
+  const kv = new ReleaseFailureKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      status: string;
+      failureKind?: string;
+      message?: string;
+      steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+    }>;
+    const run = logs.at(-1);
+    assert.equal(run?.status, "failure");
+    assert.equal(run?.failureKind, "unexpected");
+    assert.match(String(run?.message), /release delta lock/);
+    const releaseStep = run?.steps.find((step) => step.name === "release-delta-lock");
+    assert.equal(releaseStep?.status, "failure");
+    assert.match(String(releaseStep?.details?.["message"]), /KV delete failed/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("cron delta logs stale health without sending Telegram noise", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
