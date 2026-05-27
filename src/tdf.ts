@@ -1,17 +1,15 @@
-import { readFile, writeFile } from "node:fs/promises";
-
 export const TDF_OFFERS_URL = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
 export const TDF_PERFORMANCES_URL =
   "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
 
-export type TdfKeyword = {
+type TdfKeyword = {
   categoryId: number;
   categoryName: string;
   keywordId: number;
   keywordName: string;
 };
 
-export type TdfPerformance = {
+type TdfPerformance = {
   performanceId: number;
   performanceDate: string;
 };
@@ -82,37 +80,19 @@ export function markSeen(state: SeenState, items: AlertItem[]): SeenState {
   return { seen: [...seen].sort() };
 }
 
-export async function readSeenState(path: string): Promise<SeenState> {
-  try {
-    const raw = await readFile(path, "utf8");
-    const parsed = JSON.parse(raw) as unknown;
-    return parseSeenState(parsed);
-  } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-      return { seen: [] };
-    }
-
-    throw error;
-  }
-}
-
-export async function writeSeenState(path: string, state: SeenState): Promise<void> {
-  await writeFile(path, `${JSON.stringify(state, null, 2)}\n`);
-}
-
 export function parseSeenState(input: unknown): SeenState {
-  if (!isRecord(input) || !Array.isArray(input.seen)) {
+  if (!isRecord(input) || !Array.isArray(input["seen"])) {
     throw new Error("Seen state must contain a seen array.");
   }
 
-  if (!input.seen.every((value) => typeof value === "string")) {
+  if (!input["seen"].every((value) => typeof value === "string")) {
     throw new Error("Seen state contains a non-string id.");
   }
 
-  return { seen: [...new Set(input.seen)].sort() };
+  return { seen: [...new Set(input["seen"])].sort() };
 }
 
-export function makeAlertId(productionSeasonId: number, performanceId: number): string {
+function makeAlertId(productionSeasonId: number, performanceId: number): string {
   return `${productionSeasonId}:${performanceId}`;
 }
 
@@ -125,12 +105,12 @@ function parseOffer(input: unknown, index: number): TdfOffer {
     productionSeasonId: numberField(input, "productionSeasonId", index),
     title: stringField(input, "title", index),
     facility: stringField(input, "facility", index),
-    keywords: keywordArray(input.keywords, "keywords", index),
+    keywords: keywordArray(input["keywords"], "keywords", index),
     thumbnail: stringField(input, "thumbnail", index),
-    performances: performanceArray(input.performances, index),
+    performances: performanceArray(input["performances"], index),
     isTAP: booleanField(input, "isTAP", index),
     isNew: booleanField(input, "isNew", index),
-    promotions: keywordArray(input.promotions, "promotions", index)
+    promotions: keywordArray(input["promotions"], "promotions", index)
   };
 }
 

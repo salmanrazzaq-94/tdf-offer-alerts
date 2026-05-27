@@ -27,9 +27,7 @@ test("pre-check workflow validates pull requests without deploying production", 
   assert.match(preCheckWorkflow, /^\s*pull_request:\s*$/m);
   assert.match(preCheckWorkflow, /^\s*push:\s*$/m);
   assert.match(preCheckWorkflow, /^\s+- main\s*$/m);
-  assert.match(preCheckWorkflow, /npm run check/);
-  assert.match(preCheckWorkflow, /npm test/);
-  assert.match(preCheckWorkflow, /npm run worker:dry-run/);
+  assert.match(preCheckWorkflow, /npm run quality/);
   assert.doesNotMatch(preCheckWorkflow, /wrangler deploy\s*$/m);
 });
 
@@ -38,9 +36,7 @@ test("worker deploy workflow only deploys production from main", () => {
   assert.match(deployWorkflow, /^\s*workflow_dispatch:\s*$/m);
   assert.match(deployWorkflow, /^\s+- main\s*$/m);
   assert.match(deployWorkflow, /if: github\.ref == 'refs\/heads\/main'/);
-  assert.match(deployWorkflow, /npm run check/);
-  assert.match(deployWorkflow, /npm test/);
-  assert.match(deployWorkflow, /npm run worker:dry-run/);
+  assert.match(deployWorkflow, /npm run quality/);
   assert.match(deployWorkflow, /npm run worker:deploy/);
   assert.match(deployWorkflow, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
   assert.doesNotMatch(deployWorkflow, /^\s*pull_request:\s*$/m);
@@ -48,8 +44,10 @@ test("worker deploy workflow only deploys production from main", () => {
 
 test("production deploy script is guarded to origin main", () => {
   assert.equal(packageJson.scripts["worker:dry-run"], "wrangler deploy --dry-run");
-  assert.match(packageJson.scripts["worker:deploy"], /ensure-production-deploy-from-main\.mjs/);
-  assert.match(packageJson.scripts["worker:deploy"], /wrangler deploy/);
+  const workerDeploy = packageJson.scripts["worker:deploy"];
+  assert.ok(workerDeploy);
+  assert.match(workerDeploy, /ensure-production-deploy-from-main\.mjs/);
+  assert.match(workerDeploy, /wrangler deploy/);
   assert.match(deployGuard, /const productionBranch = "main"/);
   assert.match(deployGuard, /const productionRemote = "origin"/);
   assert.match(deployGuard, /runGit\(\["fetch", "--quiet", productionRemote, `\$\{productionBranch\}:refs\/remotes\/\$\{productionRef\}`\]\)/);

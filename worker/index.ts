@@ -103,7 +103,17 @@ type DebugSnapshot = {
   lastSuccess: RunLog | null;
   lastFailure: RunLog | null;
   lastRun: RunLog | null;
-  recentRuns: Array<Pick<RunLog, "finishedAt" | "event" | "status" | "trigger" | "shows" | "performances" | "newPerformances" | "failureKind" | "message">>;
+  recentRuns: Array<{
+    finishedAt: string;
+    event: RunLog["event"];
+    status: RunLog["status"];
+    trigger: string;
+    shows: number | undefined;
+    performances: number | undefined;
+    newPerformances: number | undefined;
+    failureKind: RunLog["failureKind"] | undefined;
+    message: string | undefined;
+  }>;
 };
 
 const cookieKey = "TDF_COOKIE";
@@ -190,7 +200,8 @@ export default {
         return new Response("Not found", { status: 404 });
       }
       const form = await request.formData();
-      const cookie = normalizeCookie(String(form.get("cookie") ?? ""));
+      const cookieValue = form.get("cookie");
+      const cookie = normalizeCookie(typeof cookieValue === "string" ? cookieValue : "");
       const run = createRun("cookie", "cookie-form");
       try {
         const result = await fetchTdfOffers(cookie, run);
@@ -213,7 +224,7 @@ export default {
     }
 
     if (request.method === "POST" && url.pathname === "/telegram") {
-      const update = (await request.json()) as TelegramUpdate;
+      const update: TelegramUpdate = await request.json();
       ctx.waitUntil(handleTelegram(update, env, request.url));
       return json({ ok: true });
     }
@@ -524,8 +535,8 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
 async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Promise<RunLog> {
   const run = createRun("refresh", "github:refresh-cookie");
   const details = await readRefreshFailureDetails(request);
-  const reason = details.reason || "Browserbase refresh workflow failed.";
-  const sourceRunId = details.source_run_id || details.sourceRunId;
+  const reason = details["reason"] || "Browserbase refresh workflow failed.";
+  const sourceRunId = details["source_run_id"] || details["sourceRunId"];
   const state = await readAuthState(env);
   const lastNotifiedAt = state.lastFailureNotifiedAt
     ? new Date(state.lastFailureNotifiedAt).valueOf()
@@ -585,7 +596,7 @@ async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Prom
 async function readRefreshFailureDetails(request: Request): Promise<Record<string, string>> {
   const contentType = request.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
-    const parsed = (await request.json()) as Record<string, unknown>;
+    const parsed: Record<string, unknown> = await request.json();
     return Object.fromEntries(
       Object.entries(parsed).map(([key, value]) => [
         key,
@@ -1078,23 +1089,8 @@ async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquired: bool
 
 async function releaseDeltaLock(env: Env, run: RunLog): Promise<void> {
   const started = Date.now();
-  const store = env.TDF_ALERTS as KVNamespace & { delete?: (key: string) => Promise<void> };
-  if (store.delete) {
-    await store.delete(deltaLockKey);
-    addStep(run, "release-delta-lock", "success", { durationMs: Date.now() - started });
-  } else {
-    await env.TDF_ALERTS.put(
-      deltaLockKey,
-      JSON.stringify({
-        owner: "released",
-        acquiredAt: "1970-01-01T00:00:00.000Z"
-      })
-    );
-    addStep(run, "release-delta-lock", "success", {
-      durationMs: Date.now() - started,
-      fallback: "put-expired-lock"
-    });
-  }
+  await env.TDF_ALERTS.delete(deltaLockKey);
+  addStep(run, "release-delta-lock", "success", { durationMs: Date.now() - started });
 }
 
 async function checkStaleHealth(env: Env, run: RunLog): Promise<void> {
@@ -1210,13 +1206,19 @@ function addStep(
   status: RunStep["status"],
   details?: Record<string, unknown>
 ): void {
-  run.steps.push({
+  const step: RunStep = {
     name,
     status,
-    at: new Date().toISOString(),
-    durationMs: typeof details?.durationMs === "number" ? details.durationMs : undefined,
-    details
-  });
+    at: new Date().toISOString()
+  };
+  const durationMs = details?.["durationMs"];
+  if (typeof durationMs === "number") {
+    step.durationMs = durationMs;
+  }
+  if (details) {
+    step.details = details;
+  }
+  run.steps.push(step);
 }
 
 function finishRun(
@@ -1235,24 +1237,27 @@ function parseOffers(input: unknown): TdfOffer[] {
     throw new TdfError("TDF response was not a JSON array.", "unexpected");
   }
   return input.map((item) => {
-    if (!isRecord(item) || !Array.isArray(item.performances)) {
+    if (!isRecord(item) || !Array.isArray(item["performances"])) {
       throw new TdfError("TDF response had an invalid offer shape.", "unexpected");
     }
-    return {
-      productionSeasonId: Number(item.productionSeasonId),
-      title: String(item.title),
-      facility: String(item.facility),
-      thumbnail: typeof item.thumbnail === "string" ? item.thumbnail : undefined,
-      performances: item.performances.map((performance) => {
+    const offer: TdfOffer = {
+      productionSeasonId: Number(item["productionSeasonId"]),
+      title: String(item["title"]),
+      facility: String(item["facility"]),
+      performances: item["performances"].map((performance) => {
         if (!isRecord(performance)) {
           throw new TdfError("TDF response had an invalid performance shape.", "unexpected");
         }
         return {
-          performanceId: Number(performance.performanceId),
-          performanceDate: String(performance.performanceDate)
+          performanceId: Number(performance["performanceId"]),
+          performanceDate: String(performance["performanceDate"])
         };
       })
     };
+    if (typeof item["thumbnail"] === "string") {
+      offer.thumbnail = item["thumbnail"];
+    }
+    return offer;
   });
 }
 
@@ -1550,8 +1555,8 @@ function looksLikeAuthFailure(body: string): boolean {
 
 function getSetCookieHeaders(response: Response): string[] {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] };
-  const setCookies = headers.getSetCookie?.();
-  if (setCookies?.length) {
+  const setCookies = typeof headers.getSetCookie === "function" ? headers.getSetCookie() : [];
+  if (setCookies.length > 0) {
     return setCookies;
   }
 
@@ -1575,6 +1580,9 @@ function mergeSetCookies(cookie: string, setCookies: string[]): string {
 
   for (const setCookie of setCookies) {
     const [nameValue] = setCookie.split(";");
+    if (!nameValue) {
+      continue;
+    }
     const separatorIndex = nameValue.indexOf("=");
     if (separatorIndex > 0) {
       values.set(nameValue.slice(0, separatorIndex).trim(), nameValue.slice(separatorIndex + 1));

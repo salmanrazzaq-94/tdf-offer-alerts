@@ -1,0 +1,17 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": [
+    "src/login-local.ts",
+    "src/login-browserbase.ts",
+    "test/*.test.ts",
+    "scripts/*.mjs",
+    ".github/workflows/*.yml"
+  ],
+  "project": [
+    "src/**/*.ts",
+    "worker/**/*.ts",
+    "test/**/*.ts",
+    "scripts/**/*.mjs",
+    "*.js"
+  ]
+}

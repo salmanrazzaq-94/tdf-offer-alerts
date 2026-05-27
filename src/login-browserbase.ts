@@ -11,8 +11,8 @@ const envPath = ".env";
 type LoginEnv = {
   browserbaseApiKey: string;
   browserbaseProjectId: string;
-  browserbaseContextId?: string;
-  cookieFormToken?: string;
+  browserbaseContextId: string | undefined;
+  cookieFormToken: string | undefined;
   workerBaseUrl: string;
   tdfEmail: string;
   tdfPassword: string;
@@ -151,9 +151,9 @@ function readLoginEnv(env: NodeJS.ProcessEnv = process.env): LoginEnv {
   return {
     browserbaseApiKey: required(env, "BROWSERBASE_API_KEY"),
     browserbaseProjectId: required(env, "BROWSERBASE_PROJECT_ID"),
-    browserbaseContextId: env.BROWSERBASE_CONTEXT_ID || undefined,
-    cookieFormToken: env.COOKIE_FORM_TOKEN || undefined,
-    workerBaseUrl: env.WORKER_BASE_URL || "https://tdf-alerts-bot.salmanrazzaq94.workers.dev",
+    browserbaseContextId: env["BROWSERBASE_CONTEXT_ID"] || undefined,
+    cookieFormToken: env["COOKIE_FORM_TOKEN"] || undefined,
+    workerBaseUrl: env["WORKER_BASE_URL"] || "https://tdf-alerts-bot.salmanrazzaq94.workers.dev",
     tdfEmail: required(env, "TDF_EMAIL"),
     tdfPassword: required(env, "TDF_PASSWORD")
   };
@@ -206,14 +206,15 @@ async function uploadCookieToWorker(cookie: string, env: LoginEnv): Promise<void
   if (!verifyResponse.ok) {
     throw new Error(`Cloudflare saved the cookie, but final verification failed: ${verifyResponse.status} ${await verifyResponse.text()}`);
   }
-  const verification = (await verifyResponse.json()) as { status?: string; shows?: number; performances?: number; message?: string };
+  const verification: { status?: string; shows?: number; performances?: number; message?: string } =
+    await verifyResponse.json();
   if (verification.status !== "success") {
     throw new Error(`Cloudflare final verification failed: ${JSON.stringify(verification)}`);
   }
-  console.log(`Cloudflare final verification passed: ${verification.shows} shows, ${verification.performances} performances.`);
+  console.log(`Cloudflare final verification passed: ${verification.shows ?? "unknown"} shows, ${verification.performances ?? "unknown"} performances.`);
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   console.error(error);
   process.exitCode = 1;
 });
