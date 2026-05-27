@@ -19,6 +19,8 @@
     "login:browserbase": "npm run build && node --env-file=.env dist/src/login-browserbase.js",
     "install-browser": "playwright install chromium",
     "worker:dry-run": "wrangler deploy --dry-run",
+    "worker:e2e-deploy": "wrangler deploy --config wrangler.e2e.toml",
+    "worker:e2e": "node scripts/worker-e2e.mjs",
     "worker:deploy": "node scripts/ensure-production-deploy-from-main.mjs && wrangler deploy"
   },
   "dependencies": {

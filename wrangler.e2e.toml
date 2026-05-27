@@ -1,0 +1,12 @@
+name = "tdf-alerts-bot-e2e"
+main = "worker/index.ts"
+compatibility_date = "2026-05-23"
+workers_dev = true
+
+[vars]
+GITHUB_REPOSITORY = "salmanrazzaq-94/tdf-offer-alerts"
+GITHUB_REFRESH_REF = "main"
+
+[[kv_namespaces]]
+binding = "TDF_ALERTS"
+id = "663fc62f616f4b22a232d75be8607ad5"

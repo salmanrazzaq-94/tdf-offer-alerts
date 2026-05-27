@@ -52,7 +52,7 @@ type RunStep = {
 
 type RunLog = {
   id: string;
-  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug" | "refresh";
+  event: "delta" | "daily" | "command" | "cookie" | "status" | "verify" | "debug" | "logs" | "refresh";
   status: "success" | "failure" | "skipped";
   trigger: string;
   startedAt: string;
@@ -279,8 +279,7 @@ async function handleTelegram(update: TelegramUpdate, env: Env, requestUrl: stri
   }
 
   if (text === "/logs" || text === "/logs@tdf_alert_watcher_bot") {
-    const logs = await readLogs(env);
-    await sendMessage(env, formatLogs(logs.slice(-8)));
+    await runLogs(env);
     return;
   }
 
@@ -467,6 +466,26 @@ async function runDebug(env: Env): Promise<void> {
     finishRun(run, "success", {
       notificationSent: true,
       message: "Debug snapshot sent."
+    });
+  } catch (error) {
+    finishRun(run, "failure", {
+      failureKind: classifyError(error),
+      message: errorMessage(error)
+    });
+  }
+  await appendLog(env, run);
+}
+
+async function runLogs(env: Env): Promise<void> {
+  const run = createRun("logs", "telegram:/logs");
+  const logs = await readLogs(env);
+  try {
+    const sendStarted = Date.now();
+    await sendMessage(env, formatLogs(logs.slice(-8)));
+    addStep(run, "send-telegram-logs", "success", { durationMs: Date.now() - sendStarted });
+    finishRun(run, "success", {
+      notificationSent: true,
+      message: `Sent ${Math.min(logs.length, 8)} recent run logs.`
     });
   } catch (error) {
     finishRun(run, "failure", {

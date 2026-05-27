@@ -198,32 +198,57 @@ npm install
 Run tests:
 
 ```sh
-npm run check
+npm run quality
 npm test
 npm run worker:dry-run
 ```
 
-Test Worker changes on a PR without deploying production:
+Test Worker changes without deploying production:
 
 ```sh
 npm run worker:dry-run
 ```
 
-Deploy production Worker:
+## CI And Deployment Isolation
 
-Production deploys are handled by the `Deploy Worker` GitHub Actions workflow
-after changes land on `main`. The workflow repeats `check`, `test`, and
-`worker:dry-run` before running Wrangler.
+Pull requests run two required GitHub jobs before merge:
 
-For emergency local deploys only:
+- `pre-check`: `npm run quality`, which includes typecheck, lint, knip,
+  coverage-gated tests, and Wrangler dry-run.
+- `e2e`: deploys `tdf-alerts-bot-e2e`, logs into TDF with Browserbase, verifies
+  the saved cookie against TDF, and exercises noisy paths only against the E2E
+  Worker and test Telegram chat.
 
-```sh
-npm run worker:deploy
-```
+The E2E job covers:
 
-That command refuses to run unless the checkout is clean, on `main`, and at the
-same commit as `origin/main`. PR branches should use `worker:dry-run` for Worker
-validation before merge.
+- `/health`
+- `/cookie` GET and POST
+- `/verify-cookie`
+- `/run-delta`
+- `/run-daily`
+- `/debug`
+- `/logs`
+- Telegram `/status`
+- Telegram `/debug`
+- Telegram `/logs`
+- Telegram `/offers`
+- Browserbase refresh failure callback through `/refresh-failed`
+
+The E2E job uses an isolated Cloudflare Worker and KV namespace:
+
+- production Worker: `tdf-alerts-bot`
+- E2E Worker: `tdf-alerts-bot-e2e`
+- production KV: `565f5f3899a547439f1ce155e9947971`
+- E2E KV: `663fc62f616f4b22a232d75be8607ad5`
+
+Production deploys are handled only by the `Deploy Worker` GitHub Actions
+workflow on `push` to protected `main`. The deploy workflow has no
+`workflow_dispatch` trigger. `npm run worker:deploy` refuses to run outside the
+GitHub Actions push-to-main workflow.
+
+Production smoke remains quiet. It only checks `/health`, `/debug`, and
+`/verify-cookie`; it does not run `/run-delta`, `/run-daily`, Telegram commands,
+or refresh-failure callbacks against production.
 
 ## Required Secrets
 
@@ -253,6 +278,17 @@ TDF_EMAIL
 TDF_PASSWORD
 COOKIE_FORM_TOKEN
 WORKER_BASE_URL
+```
+
+GitHub Actions secrets for PR E2E and production deploy:
+
+```text
+CLOUDFLARE_API_TOKEN
+CLOUDFLARE_ACCOUNT_ID
+E2E_BROWSERBASE_CONTEXT_ID
+E2E_COOKIE_FORM_TOKEN
+E2E_TELEGRAM_CHAT_ID
+E2E_WORKER_BASE_URL
 ```
 
 Local `.env` for manual refresh/testing:
@@ -310,6 +346,7 @@ The test suite covers:
 - debug snapshot endpoint
 - scheduled cron lock skip
 - stale-success health warning path
+- workflow isolation: PR quality, PR E2E, main-only deploy, no manual production deploy
 
 ## Security Notes
 
@@ -327,6 +364,8 @@ Keep these out of git:
 - `TDF_PASSWORD`
 - `CLOUDFLARE_API_TOKEN`
 - `CLOUDFLARE_ACCOUNT_ID`
+- `E2E_COOKIE_FORM_TOKEN`
+- `E2E_TELEGRAM_CHAT_ID`
 
 Never commit `.env`, exported cookies, logged-in screenshots, or browser storage files.
 

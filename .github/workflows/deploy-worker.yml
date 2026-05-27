@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -46,3 +45,9 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Smoke test production Worker
+        run: npm run smoke:worker
+        env:
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+          COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
