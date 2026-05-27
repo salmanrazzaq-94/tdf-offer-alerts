@@ -45,12 +45,14 @@ test("pre-check workflow validates pull requests without deploying production", 
   assert.match(preCheckWorkflow, /^\s+- main\s*$/m);
   assert.match(preCheckWorkflow, /npm run quality/);
   assert.match(preCheckWorkflow, /^\s*e2e:\s*$/m);
-  assert.match(preCheckWorkflow, /npm run worker:e2e-deploy/);
   assert.match(preCheckWorkflow, /npm run login:browserbase/);
   assert.match(preCheckWorkflow, /npm run worker:e2e/);
+  assert.match(preCheckWorkflow, /E2E_LOCAL_WORKER: "true"/);
+  assert.match(preCheckWorkflow, /TELEGRAM_BOT_TOKEN/);
   assert.match(preCheckWorkflow, /E2E_TELEGRAM_CHAT_ID/);
-  assert.match(preCheckWorkflow, /E2E_WORKER_BASE_URL/);
   assert.match(preCheckWorkflow, /E2E_COOKIE_FORM_TOKEN/);
+  assert.doesNotMatch(preCheckWorkflow, /npm run worker:e2e-deploy/);
+  assert.doesNotMatch(preCheckWorkflow, /CLOUDFLARE_API_TOKEN/);
   assert.doesNotMatch(preCheckWorkflow, /wrangler deploy\s*$/m);
 });
 
@@ -80,7 +82,7 @@ test("production smoke stays quiet and limited", () => {
 test("production deploy script is guarded to GitHub Actions push on origin main", () => {
   assert.equal(packageJson.scripts["worker:dry-run"], "wrangler deploy --dry-run");
   assert.equal(packageJson.scripts["worker:e2e-deploy"], "wrangler deploy --config wrangler.e2e.toml");
-  assert.equal(packageJson.scripts["worker:e2e"], "node scripts/worker-e2e.mjs");
+  assert.equal(packageJson.scripts["worker:e2e"], "npm run build && node scripts/worker-e2e.mjs");
 
   const workerDeploy = packageJson.scripts["worker:deploy"];
   assert.ok(workerDeploy);
@@ -107,9 +109,12 @@ test("e2e worker uses isolated Cloudflare resources", () => {
 });
 
 test("e2e script verifies worker endpoints and telegram delivery paths", () => {
+  assert.match(workerE2eScript, /E2E_LOCAL_WORKER/);
+  assert.match(workerE2eScript, /dist\/worker\/index\.js/);
   assert.match(workerE2eScript, /E2E_WORKER_BASE_URL/);
   assert.match(workerE2eScript, /E2E_COOKIE_FORM_TOKEN/);
   assert.match(workerE2eScript, /E2E_TELEGRAM_CHAT_ID/);
+  assert.match(workerE2eScript, /TELEGRAM_BOT_TOKEN/);
   assert.match(workerE2eScript, /\/health/);
   assert.match(workerE2eScript, /\/cookie/);
   assert.match(workerE2eScript, /\/verify-cookie/);
