@@ -6,8 +6,8 @@ import { flattenOffers, TDF_OFFERS_URL } from "./tdf.js";
 
 const TDF_LOGIN_URL = "https://my.tdf.org/account/login";
 const envPath = ".env";
-const profilePath = process.env.LOCAL_BROWSER_PROFILE ?? ".auth/tdf-profile";
-const holdMs = Number(process.env.SESSION_HOLD_SECONDS ?? 600) * 1000;
+const profilePath = process.env["LOCAL_BROWSER_PROFILE"] ?? ".auth/tdf-profile";
+const holdMs = Number(process.env["SESSION_HOLD_SECONDS"] ?? 600) * 1000;
 
 async function main(): Promise<void> {
   await mkdir(profilePath, { recursive: true });
@@ -87,7 +87,7 @@ async function upsertEnvValue(key: string, value: string): Promise<void> {
   await writeFile(envPath, next);
 }
 
-main().catch((error) => {
+main().catch((error: unknown) => {
   console.error(error);
   process.exitCode = 1;
 });

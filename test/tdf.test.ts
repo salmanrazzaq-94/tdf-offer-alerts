@@ -65,10 +65,12 @@ test("diffs first run, second run, and a later new performance", () => {
   const afterFirstRun = markSeen(emptyState, firstRun);
   assert.equal(findNewAlerts(alerts, afterFirstRun).length, 0);
 
+  const firstAlert = alerts[0];
+  assert.ok(firstAlert);
   const laterAlerts = [
     ...alerts,
     {
-      ...alerts[0],
+      ...firstAlert,
       id: "230117:242528",
       performanceId: 242528,
       performanceDate: "2026-05-27T19:00:00-04:00"

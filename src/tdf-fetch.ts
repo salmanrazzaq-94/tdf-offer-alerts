@@ -1,10 +1,10 @@
 import { parseTdfOffers, TDF_OFFERS_URL, TDF_PERFORMANCES_URL, type TdfOffer } from "./tdf.js";
 
-export type TdfFetchErrorKind = "auth" | "transient" | "unexpected";
+type TdfFetchErrorKind = "auth" | "transient" | "unexpected";
 
-export class TdfFetchError extends Error {
+class TdfFetchError extends Error {
   readonly kind: TdfFetchErrorKind;
-  readonly status?: number;
+  readonly status: number | undefined;
 
   constructor(message: string, kind: TdfFetchErrorKind, status?: number) {
     super(message);

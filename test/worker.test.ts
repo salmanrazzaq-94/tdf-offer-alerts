@@ -204,7 +204,7 @@ test("auth failure dispatches one automatic Browserbase refresh without Telegram
 
 test("Browserbase refresh failure callback sends the Telegram attention message", async () => {
   const kv = new MemoryKV();
-  const calls: Array<{ url: string; body?: string }> = [];
+  const calls: Array<{ url: string; body: string | undefined }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
@@ -506,7 +506,7 @@ test("telegram status command starts Browserbase recovery without Telegram noise
 test("dispatch failure sends a clear recovery attention message", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
-  const calls: Array<{ url: string; body?: string }> = [];
+  const calls: Array<{ url: string; body: string | undefined }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);

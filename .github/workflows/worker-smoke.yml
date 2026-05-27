@@ -1,12 +1,9 @@
-name: Pre-check
+name: Worker Smoke
 
 on:
-  pull_request:
-    branches:
-      - main
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
 
 permissions:
   contents: read
@@ -15,9 +12,9 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
-  pre-check:
+  smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,9 +23,13 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Run quality gates
-        run: npm run quality
+      - name: Smoke test deployed Worker
+        run: npm run smoke:worker
+        env:
+          WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
+          COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}

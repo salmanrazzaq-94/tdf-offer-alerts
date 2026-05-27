@@ -35,14 +35,8 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: TypeScript check
-        run: npm run check
-
-      - name: Unit tests
-        run: npm test
-
-      - name: Worker dry run
-        run: npm run worker:dry-run
+      - name: Run quality gates
+        run: npm run quality
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
