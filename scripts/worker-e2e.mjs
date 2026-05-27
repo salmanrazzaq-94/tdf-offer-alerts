@@ -2,10 +2,30 @@
 
 import { readFileSync } from "node:fs";
 
-const baseUrl = required("E2E_WORKER_BASE_URL").replace(/\/$/, "");
+class MemoryKV {
+  constructor() {
+    this.values = new Map();
+  }
+
+  async get(key) {
+    return this.values.get(key) ?? null;
+  }
+
+  async put(key, value) {
+    this.values.set(key, value);
+  }
+
+  async delete(key) {
+    this.values.delete(key);
+  }
+}
+
+const localMode = process.env.E2E_LOCAL_WORKER === "true";
+const baseUrl = (process.env.E2E_WORKER_BASE_URL ?? "https://worker.e2e.test").replace(/\/$/, "");
 const token = required("E2E_COOKIE_FORM_TOKEN");
 const telegramChatId = required("E2E_TELEGRAM_CHAT_ID");
 const tdfCookie = readEnvFileValue("TDF_COOKIE");
+const workerClient = localMode ? await createLocalWorkerClient() : null;
 
 const health = await getJson("/health", { authorized: false });
 if (health.ok !== true) {
@@ -123,7 +143,7 @@ async function getText(path, options = {}) {
   if (options.authorized !== false) {
     url.searchParams.set("token", token);
   }
-  const response = await fetch(url);
+  const response = await workerFetch(url);
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`${path} failed with ${response.status}: ${body.slice(0, 500)}`);
@@ -136,7 +156,7 @@ async function postCookie(cookie) {
   url.searchParams.set("token", token);
   const form = new FormData();
   form.set("cookie", cookie);
-  const response = await fetch(url, { method: "POST", body: form });
+  const response = await workerFetch(url, { method: "POST", body: form });
   const body = await response.text();
   if (!response.ok) {
     throw new Error(`/cookie POST failed with ${response.status}: ${body.slice(0, 500)}`);
@@ -146,7 +166,7 @@ async function postCookie(cookie) {
 
 async function postRefreshFailure() {
   const reason = "CI E2E refresh failure callback; expected test path, not a production incident.";
-  const response = await fetch(`${baseUrl}/refresh-failed?token=${encodeURIComponent(token)}`, {
+  const response = await workerFetch(`${baseUrl}/refresh-failed?token=${encodeURIComponent(token)}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -177,7 +197,7 @@ async function runTelegramCommand(text, event, trigger) {
 async function postTelegramCommand(text) {
   const chatIdNumber = Number(telegramChatId);
   const chatId = Number.isSafeInteger(chatIdNumber) ? chatIdNumber : telegramChatId;
-  const response = await fetch(`${baseUrl}/telegram`, {
+  const response = await workerFetch(`${baseUrl}/telegram`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -197,6 +217,40 @@ async function postTelegramCommand(text) {
   if (!response.ok) {
     throw new Error(`/telegram failed with ${response.status}: ${body.slice(0, 500)}`);
   }
+}
+
+async function workerFetch(input, init) {
+  if (!workerClient) {
+    return fetch(input, init);
+  }
+  return workerClient.fetch(input, init);
+}
+
+async function createLocalWorkerClient() {
+  const worker = (await import("../dist/worker/index.js")).default;
+  const kv = new MemoryKV();
+  const env = {
+    TDF_ALERTS: kv,
+    TELEGRAM_BOT_TOKEN: required("TELEGRAM_BOT_TOKEN"),
+    TELEGRAM_CHAT_ID: telegramChatId,
+    COOKIE_FORM_TOKEN: token,
+    GITHUB_REPOSITORY: process.env.GITHUB_REPOSITORY || "salmanrazzaq-94/tdf-offer-alerts",
+    GITHUB_REFRESH_REF: process.env.GITHUB_REFRESH_REF || "main"
+  };
+
+  return {
+    async fetch(input, init) {
+      const waitUntilPromises = [];
+      const ctx = {
+        waitUntil(promise) {
+          waitUntilPromises.push(Promise.resolve(promise));
+        }
+      };
+      const response = await worker.fetch(new Request(input, init), env, ctx);
+      await Promise.all(waitUntilPromises);
+      return response;
+    }
+  };
 }
 
 async function waitForLog(predicate) {
