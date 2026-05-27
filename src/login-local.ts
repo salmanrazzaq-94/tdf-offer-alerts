@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { chromium, type BrowserContext } from "playwright";
+import { createOperationLogger, type OperationLogger } from "./observability.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers, TDF_OFFERS_URL } from "./tdf.js";
 
@@ -10,37 +11,46 @@ const profilePath = process.env["LOCAL_BROWSER_PROFILE"] ?? ".auth/tdf-profile";
 const holdMs = Number(process.env["SESSION_HOLD_SECONDS"] ?? 600) * 1000;
 
 async function main(): Promise<void> {
+  const logger = createOperationLogger("login-local");
   await mkdir(profilePath, { recursive: true });
 
-  const context = await chromium.launchPersistentContext(profilePath, {
+  const context = await logger.step("browser-launch", () => chromium.launchPersistentContext(profilePath, {
     headless: false,
     viewport: { width: 1440, height: 1000 }
-  });
+  }), { profilePath, holdSeconds: holdMs / 1000 });
 
   try {
     const page = context.pages()[0] ?? (await context.newPage());
-    await page.goto(TDF_LOGIN_URL, { waitUntil: "domcontentloaded" });
+    await logger.step("tdf-login-page-open", () =>
+      page.goto(TDF_LOGIN_URL, { waitUntil: "domcontentloaded" }), { url: TDF_LOGIN_URL });
 
-    console.log("Local Playwright browser opened.");
-    console.log("Log into TDF in the browser window. I will detect the session and save TDF_COOKIE.");
+    logger.info("local-login-waiting-for-user");
 
-    const cookie = await waitForTdfCookie(context);
-    const offers = await fetchTdfOffersWithCookie(cookie);
-    await upsertEnvValue("TDF_COOKIE", cookie);
+    const cookie = await waitForTdfCookie(context, logger);
+    const offers = await logger.step("verify-cookie-locally", () =>
+      fetchTdfOffersWithCookie(cookie, logger));
+    await logger.step("save-cookie-env", () => upsertEnvValue("TDF_COOKIE", cookie));
 
     const performances = flattenOffers(offers);
-    console.log(`Saved TDF_COOKIE to .env.`);
-    console.log(`Verified ${offers.length} productions and ${performances.length} performances.`);
+    logger.info("login-local:success", {
+      shows: offers.length,
+      performances: performances.length
+    });
   } finally {
-    await context.close();
+    await logger.step("browser-close", () => context.close());
   }
 }
 
-async function waitForTdfCookie(context: BrowserContext): Promise<string> {
+async function waitForTdfCookie(
+  context: BrowserContext,
+  logger: OperationLogger
+): Promise<string> {
   const startedAt = Date.now();
   let lastError = "Not logged in yet.";
+  let attempts = 0;
 
   while (Date.now() - startedAt < holdMs) {
+    attempts += 1;
     const pages = context.pages();
     const page = pages[0] ?? (await context.newPage());
     if (!page.url().includes("tdf.org")) {
@@ -50,10 +60,15 @@ async function waitForTdfCookie(context: BrowserContext): Promise<string> {
     const cookie = await cookieHeader(context);
     if (hasTdfSessionCookie(cookie)) {
       try {
-        await fetchTdfOffersWithCookie(cookie);
+        await fetchTdfOffersWithCookie(cookie, logger);
+        logger.info("working-cookie-detected", { attempts });
         return cookie;
       } catch (error) {
         lastError = error instanceof Error ? error.message : String(error);
+        logger.warn("candidate-cookie-not-working", {
+          attempts,
+          message: lastError
+        });
       }
     }
 
@@ -88,6 +103,8 @@ async function upsertEnvValue(key: string, value: string): Promise<void> {
 }
 
 main().catch((error: unknown) => {
-  console.error(error);
+  createOperationLogger("login-local").error("fatal", {
+    message: error instanceof Error ? error.message : String(error)
+  });
   process.exitCode = 1;
 });

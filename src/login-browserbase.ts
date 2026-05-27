@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { Browserbase } from "@browserbasehq/sdk";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { createOperationLogger, type OperationLogger } from "./observability.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers, TDF_OFFERS_URL } from "./tdf.js";
 
@@ -19,56 +20,76 @@ type LoginEnv = {
 };
 
 async function main(): Promise<void> {
+  const logger = createOperationLogger("login-browserbase");
   const env = readLoginEnv();
   const bb = new Browserbase({ apiKey: env.browserbaseApiKey });
-  const contextId = env.browserbaseContextId ?? (await createBrowserbaseContext(bb, env));
+  const contextId = env.browserbaseContextId ?? (await logger.step(
+    "browserbase-context-create",
+    () => createBrowserbaseContext(bb, env),
+    { projectId: env.browserbaseProjectId }
+  ));
 
-  console.log(`Using Browserbase context ${contextId}.`);
-  const session = await bb.sessions.create({
-    projectId: env.browserbaseProjectId,
-    timeout: 300,
-    browserSettings: {
-      context: {
-        id: contextId,
-        persist: true
-      },
-      os: "linux",
-      solveCaptchas: false,
-      viewport: {
-        width: 1440,
-        height: 1000
-      }
-    },
-    userMetadata: {
-      app: "tdf-offer-alerts",
-      task: "tdf-login"
-    }
+  logger.info("browserbase-context-selected", {
+    contextId,
+    reusedContext: Boolean(env.browserbaseContextId)
   });
+  const session = await logger.step("browserbase-session-create", () =>
+    bb.sessions.create({
+      projectId: env.browserbaseProjectId,
+      timeout: 300,
+      browserSettings: {
+        context: {
+          id: contextId,
+          persist: true
+        },
+        os: "linux",
+        solveCaptchas: false,
+        viewport: {
+          width: 1440,
+          height: 1000
+        }
+      },
+      userMetadata: {
+        app: "tdf-offer-alerts",
+        task: "tdf-login"
+      }
+    }), { contextId });
 
-  console.log(`Browserbase session: https://browserbase.com/sessions/${session.id}`);
-  const browser = await chromium.connectOverCDP(session.connectUrl);
+  logger.info("browserbase-session-created", {
+    sessionId: session.id,
+    sessionUrl: `https://browserbase.com/sessions/${session.id}`
+  });
+  const browser = await logger.step("browserbase-connect", () => chromium.connectOverCDP(session.connectUrl), {
+    sessionId: session.id
+  });
   try {
     const context = browser.contexts()[0] ?? (await browser.newContext());
     const page = context.pages()[0] ?? (await context.newPage());
     try {
-      await loginToTdf(page, env);
-      await page.goto(TDF_OFFERS_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      await logger.step("tdf-login", () => loginToTdf(page, env, logger));
+      await logger.step("tdf-offers-page-load", () =>
+        page.goto(TDF_OFFERS_URL, { waitUntil: "domcontentloaded", timeout: 60_000 }), {
+        url: TDF_OFFERS_URL
+      });
 
-      const cookie = await cookieHeader(context);
-      const offers = await fetchTdfOffersWithCookie(cookie);
+      const cookie = await logger.step("collect-browser-cookies", () => cookieHeader(context));
+      const offers = await logger.step("verify-cookie-locally", () =>
+        fetchTdfOffersWithCookie(cookie, logger));
       const performances = flattenOffers(offers);
-      await upsertEnvValue("TDF_COOKIE", cookie);
-      await upsertEnvValue("BROWSERBASE_CONTEXT_ID", contextId);
-      await uploadCookieToWorker(cookie, env);
+      await logger.step("save-cookie-env", () => upsertEnvValue("TDF_COOKIE", cookie));
+      await logger.step("save-context-env", () => upsertEnvValue("BROWSERBASE_CONTEXT_ID", contextId));
+      await uploadCookieToWorker(cookie, env, logger);
 
-      console.log(`Saved TDF_COOKIE to .env.`);
-      console.log(`Verified ${offers.length} shows and ${performances.length} performances.`);
+      logger.info("login-browserbase:success", {
+        shows: offers.length,
+        performances: performances.length
+      });
     } catch (error) {
-      await saveFailureDebug(page);
+      await saveFailureDebug(page, logger);
       throw error;
     }
   } finally {
-    await closeBrowser(browser);
+    await logger.step("browser-close", () => closeBrowser(browser), { sessionId: session.id });
   }
 }
 
@@ -78,9 +99,9 @@ async function createBrowserbaseContext(bb: Browserbase, env: LoginEnv): Promise
   return context.id;
 }
 
-async function loginToTdf(page: Page, env: LoginEnv): Promise<void> {
+async function loginToTdf(page: Page, env: LoginEnv, logger: OperationLogger): Promise<void> {
   await page.goto(TDF_LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
-  console.log(`Loaded login page: ${page.url()}`);
+  logger.info("tdf-login-page-loaded", { url: page.url() });
   await failIfChallenge(page);
 
   const email = page
@@ -92,7 +113,7 @@ async function loginToTdf(page: Page, env: LoginEnv): Promise<void> {
   await password.waitFor({ state: "visible", timeout: 30_000 });
   await email.fill(env.tdfEmail);
   await password.fill(env.tdfPassword);
-  console.log("Filled TDF login form.");
+  logger.info("tdf-login-form-filled");
 
   const submit = page
     .locator('button[type="submit"], input[type="submit"], button:has-text("Log"), button:has-text("Sign")')
@@ -103,7 +124,7 @@ async function loginToTdf(page: Page, env: LoginEnv): Promise<void> {
   ]);
 
   await page.waitForTimeout(3_000);
-  console.log(`After submit: ${page.url()}`);
+  logger.info("tdf-login-submit-complete", { url: page.url() });
   await failIfChallenge(page);
 
   if (page.url().includes("/account/login")) {
@@ -123,14 +144,17 @@ async function visibleText(page: Page): Promise<string> {
   return page.locator("body").innerText({ timeout: 10_000 }).catch(() => "");
 }
 
-async function saveFailureDebug(page: Page): Promise<void> {
+async function saveFailureDebug(page: Page, logger: OperationLogger): Promise<void> {
   await mkdir(".auth", { recursive: true });
   const text = await visibleText(page);
   await writeFile(".auth/browserbase-last-page.txt", `URL: ${page.url()}\n\n${text}`);
   await page.screenshot({ path: ".auth/browserbase-last-page.png", fullPage: true }).catch(() => undefined);
-  console.log("Saved Browserbase failure debug to .auth/browserbase-last-page.txt and .auth/browserbase-last-page.png");
-  console.log(`Failure page URL: ${page.url()}`);
-  console.log(text.slice(0, 500));
+  logger.error("browserbase-failure-debug-saved", {
+    textPath: ".auth/browserbase-last-page.txt",
+    screenshotPath: ".auth/browserbase-last-page.png",
+    url: page.url(),
+    bodyPreview: text.slice(0, 500)
+  });
 }
 
 async function cookieHeader(context: BrowserContext): Promise<string> {
@@ -178,31 +202,38 @@ async function upsertEnvValue(key: string, value: string): Promise<void> {
   await writeFile(envPath, next);
 }
 
-async function uploadCookieToWorker(cookie: string, env: LoginEnv): Promise<void> {
+async function uploadCookieToWorker(
+  cookie: string,
+  env: LoginEnv,
+  logger: OperationLogger
+): Promise<void> {
   if (!env.cookieFormToken) {
-    console.log("COOKIE_FORM_TOKEN is not set, so I did not update Cloudflare KV.");
+    logger.warn("worker-cookie-upload-skipped", {
+      reason: "COOKIE_FORM_TOKEN is not set."
+    });
     return;
   }
 
+  const cookieFormToken = env.cookieFormToken;
   const form = new FormData();
   form.set("cookie", cookie);
-  const response = await fetch(
-    `${env.workerBaseUrl.replace(/\/$/, "")}/cookie?token=${encodeURIComponent(env.cookieFormToken)}`,
+  const workerRoot = env.workerBaseUrl.replace(/\/$/, "");
+  const response = await logger.step("worker-cookie-upload", () => fetch(
+    `${workerRoot}/cookie?token=${encodeURIComponent(cookieFormToken)}`,
     {
       method: "POST",
       body: form
     }
-  );
+  ), { workerRoot });
 
   if (!response.ok) {
     throw new Error(`Could not update Cloudflare KV cookie: ${response.status} ${await response.text()}`);
   }
 
-  console.log("Updated Cloudflare KV TDF_COOKIE through the Worker.");
+  logger.info("worker-cookie-upload:accepted", { status: response.status });
 
-  const verifyResponse = await fetch(
-    `${env.workerBaseUrl.replace(/\/$/, "")}/verify-cookie?token=${encodeURIComponent(env.cookieFormToken)}`
-  );
+  const verifyResponse = await logger.step("worker-cookie-verify", () =>
+    fetch(`${workerRoot}/verify-cookie?token=${encodeURIComponent(cookieFormToken)}`), { workerRoot });
   if (!verifyResponse.ok) {
     throw new Error(`Cloudflare saved the cookie, but final verification failed: ${verifyResponse.status} ${await verifyResponse.text()}`);
   }
@@ -211,10 +242,15 @@ async function uploadCookieToWorker(cookie: string, env: LoginEnv): Promise<void
   if (verification.status !== "success") {
     throw new Error(`Cloudflare final verification failed: ${JSON.stringify(verification)}`);
   }
-  console.log(`Cloudflare final verification passed: ${verification.shows ?? "unknown"} shows, ${verification.performances ?? "unknown"} performances.`);
+  logger.info("worker-cookie-verify:success", {
+    shows: verification.shows ?? "unknown",
+    performances: verification.performances ?? "unknown"
+  });
 }
 
 main().catch((error: unknown) => {
-  console.error(error);
+  createOperationLogger("login-browserbase").error("fatal", {
+    message: error instanceof Error ? error.message : String(error)
+  });
   process.exitCode = 1;
 });
