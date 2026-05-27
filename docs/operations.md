@@ -77,6 +77,48 @@ npm run smoke:worker
 
 Production smoke intentionally checks only `/health`, `/debug`, and `/verify-cookie`. It does not trigger Telegram alerts, daily digest, delta runs, or refresh-failure callbacks.
 
+## Reading Workers Logs
+
+Cloudflare Workers Logs are the source of truth for runtime diagnostics. They include invocation logs plus structured JSON from the Worker. KV is not used for success logs.
+
+Query recent production run summaries locally:
+
+```sh
+npm run logs:worker -- --minutes 120 --event tdf-run-finished
+```
+
+Useful filters:
+
+```sh
+npm run logs:worker -- --minutes 720 --event tdf-run-finished
+npm run logs:worker -- --from 2026-05-27T12:00:00Z --to 2026-05-27T15:00:00Z --event tdf-run-finished
+npm run logs:worker -- --minutes 180 --event tdf-run-finished --status failure
+npm run logs:worker -- --minutes 180 --event tdf-run-finished --trigger telegram:/offers
+npm run logs:worker -- --minutes 60 --search github
+npm run logs:worker -- --minutes 30 --json
+```
+
+The command uses `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` from `.env`. It redacts tokenized URLs and sensitive fields before printing results.
+
+For live debugging, use Wrangler tail:
+
+```sh
+npx wrangler tail tdf-alerts-bot --format=json --sampling-rate 0.999
+```
+
+When investigating an incident, start with `tdf-run-finished` records and inspect:
+
+| Field | Meaning |
+|---|---|
+| `run.status` | Overall run result |
+| `run.trigger` | Cron, manual HTTP, smoke, or Telegram command source |
+| `run.durationMs` | End-to-end runtime |
+| `run.shows` / `run.performances` | TDF result shape for successful reads |
+| `run.newPerformances` | Whether delta had anything new to alert |
+| `stepSummaries[]` | Subsystem-level success, skip, or failure details |
+
+Some successful runs can contain a failed retry step followed by a successful fallback. Treat those as degraded-but-recovered signals: they are useful for trend debugging, but the product path still completed.
+
 ## Manual Cookie Refresh
 
 Use Browserbase first when the saved session needs repair:

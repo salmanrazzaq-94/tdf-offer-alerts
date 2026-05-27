@@ -9,6 +9,7 @@ const workerSmokeWorkflow = readFileSync(".github/workflows/worker-smoke.yml", "
 const e2eWranglerConfig = readFileSync("wrangler.e2e.toml", "utf8");
 const workerE2eScript = readFileSync("scripts/worker-e2e.mjs", "utf8");
 const smokeWorkerScript = readFileSync("scripts/smoke-worker.mjs", "utf8");
+const queryWorkerLogsScript = readFileSync("scripts/query-worker-logs.mjs", "utf8");
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts: Record<string, string>;
 };
@@ -78,6 +79,22 @@ test("production smoke stays quiet and limited", () => {
   assert.doesNotMatch(smokeWorkerScript, /\/run-daily/);
   assert.doesNotMatch(smokeWorkerScript, /\/telegram/);
   assert.doesNotMatch(smokeWorkerScript, /\/refresh-failed/);
+});
+
+test("worker log query script uses Cloudflare telemetry without leaking secrets", () => {
+  assert.equal(packageJson.scripts["logs:worker"], "node --env-file=.env scripts/query-worker-logs.mjs");
+  assert.match(queryWorkerLogsScript, /workers\/observability\/telemetry\/query/);
+  assert.match(queryWorkerLogsScript, /CLOUDFLARE_API_TOKEN/);
+  assert.match(queryWorkerLogsScript, /view: "events"/);
+  assert.match(queryWorkerLogsScript, /\$workers\.scriptName/);
+  assert.match(queryWorkerLogsScript, /tdf-run-finished/);
+  assert.match(queryWorkerLogsScript, /--minutes/);
+  assert.match(queryWorkerLogsScript, /--from/);
+  assert.match(queryWorkerLogsScript, /--to/);
+  assert.match(queryWorkerLogsScript, /\(\?:token\|code\|password\|secret\|auth\)/);
+  assert.match(queryWorkerLogsScript, /\$1\[redacted\]/);
+  assert.match(queryWorkerLogsScript, /Bearer \[redacted\]/);
+  assert.doesNotMatch(queryWorkerLogsScript, /console\.log\(token\)/);
 });
 
 test("production deploy script is guarded to GitHub Actions push on origin main", () => {

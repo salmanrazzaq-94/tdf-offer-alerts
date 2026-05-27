@@ -14,6 +14,7 @@
     "test": "npm run build && npm run test:compiled",
     "test:coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-exclude='dist/test/**/*.js' --test-coverage-lines=80 --test-coverage-branches=80 --test-coverage-functions=90 dist/test/*.test.js",
     "quality": "npm run typecheck && npm run lint && npm run knip && npm run test:coverage && npm run worker:dry-run",
+    "logs:worker": "node --env-file=.env scripts/query-worker-logs.mjs",
     "smoke:worker": "node scripts/smoke-worker.mjs",
     "login:local": "npm run build && node --env-file=.env dist/src/login-local.js",
     "login:browserbase": "npm run build && node --env-file=.env dist/src/login-browserbase.js",
