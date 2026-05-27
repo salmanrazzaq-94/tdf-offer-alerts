@@ -1,32 +1,21 @@
-import { staleSuccessAlertAfterMs, workerVersion } from "./constants.js";
-import {
-  formatDebug,
-  formatDetails,
-  formatLogs,
-  formatStatus,
-  formatSummary,
-  newYorkHour,
-  timestampedFilename
-} from "./formatters.js";
-import { addStep, appendLog, createRun, finishRun, readLogs } from "./logging.js";
+import { newYorkHour, timestampedFilename } from "./formatters.js";
+import { checkStaleHealth } from "./health.js";
+import { addStep, appendLog, createRun, finishRun } from "./logging.js";
+import { sendOfferNotification } from "./notifications.js";
 import { handleCheckFailure } from "./recovery.js";
 import {
   acquireDeltaLock,
   clearAuthState,
   normalizeCookie,
   persistRefreshedCookie,
-  readAuthState,
   readCookie,
-  readCookieMeta,
-  readHealthState,
   readSeen,
   releaseDeltaLock,
   saveCookie,
   writeSeen
 } from "./state.js";
 import { countPerformances, fetchTdfOffers, flattenOffers } from "./tdf.js";
-import { sendDocument, sendMessage } from "./telegram.js";
-import type { DebugSnapshot, Env, RunLog, TdfOffer } from "./types.js";
+import type { Env, RunLog } from "./types.js";
 import { classifyError, errorMessage, escapeHtml } from "./utils.js";
 
 export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
@@ -150,93 +139,6 @@ export async function runDailyDigest(env: Env, trigger: string): Promise<RunLog>
   return run;
 }
 
-export async function runCommandOffers(env: Env): Promise<void> {
-  const run = createRun("command", "telegram:/offers");
-  try {
-    const cookie = await readCookie(env, run);
-    const result = await fetchTdfOffers(cookie, run);
-    await persistRefreshedCookie(env, cookie, result.cookie, run);
-    const offers = result.offers;
-    const items = flattenOffers(offers);
-    const notificationSent = await sendOfferNotification(
-      env,
-      run,
-      offers,
-      items,
-      timestampedFilename("tdf-offers-command"),
-      "Latest TDF availability details"
-    );
-    finishRun(run, "success", {
-      shows: offers.length,
-      performances: items.length,
-      notificationSent
-    });
-  } catch (error) {
-    await handleCheckFailure(env, run, error);
-  }
-  await appendLog(env, run);
-}
-
-export async function runStatus(env: Env): Promise<void> {
-  const run = createRun("status", "telegram:/status");
-  try {
-    const cookie = await readCookie(env, run);
-    const result = await fetchTdfOffers(cookie, run);
-    await persistRefreshedCookie(env, cookie, result.cookie, run);
-    const snapshot = await buildDebugSnapshot(env);
-    const sendStarted = Date.now();
-    await sendMessage(env, formatStatus(snapshot, result.offers));
-    addStep(run, "send-telegram-status", "success", { durationMs: Date.now() - sendStarted });
-    finishRun(run, "success", {
-      shows: result.offers.length,
-      performances: countPerformances(result.offers),
-      notificationSent: true
-    });
-  } catch (error) {
-    await handleCheckFailure(env, run, error);
-  }
-  await appendLog(env, run);
-}
-
-export async function runDebug(env: Env): Promise<void> {
-  const run = createRun("debug", "telegram:/debug");
-  try {
-    const snapshot = await buildDebugSnapshot(env);
-    await sendMessage(env, formatDebug(snapshot));
-    addStep(run, "send-telegram-debug", "success");
-    finishRun(run, "success", {
-      notificationSent: true,
-      message: "Debug snapshot sent."
-    });
-  } catch (error) {
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error)
-    });
-  }
-  await appendLog(env, run);
-}
-
-export async function runLogs(env: Env): Promise<void> {
-  const run = createRun("logs", "telegram:/logs");
-  const logs = await readLogs(env);
-  try {
-    const sendStarted = Date.now();
-    await sendMessage(env, formatLogs(logs.slice(-8)));
-    addStep(run, "send-telegram-logs", "success", { durationMs: Date.now() - sendStarted });
-    finishRun(run, "success", {
-      notificationSent: true,
-      message: `Sent ${Math.min(logs.length, 8)} recent run logs.`
-    });
-  } catch (error) {
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error)
-    });
-  }
-  await appendLog(env, run);
-}
-
 export async function runCookieFormSave(
   env: Env,
   form: FormData
@@ -270,99 +172,4 @@ export async function appendDailyGuardSkip(env: Env, trigger: string): Promise<R
   finishRun(run, "skipped", { message: "Not 9am America/New_York." });
   await appendLog(env, run);
   return run;
-}
-
-export async function buildDebugSnapshot(env: Env): Promise<DebugSnapshot> {
-  const [logs, cookie, auth, health] = await Promise.all([
-    readLogs(env),
-    readCookieMeta(env),
-    readAuthState(env),
-    readHealthState(env)
-  ]);
-  const lastRun = logs.at(-1) ?? null;
-  const lastSuccess = [...logs].reverse().find((log) => log.status === "success") ?? null;
-  const lastFailure = [...logs].reverse().find((log) => log.status === "failure") ?? null;
-  return {
-    version: workerVersion,
-    generatedAt: new Date().toISOString(),
-    cookie,
-    auth,
-    health,
-    lastSuccess,
-    lastFailure,
-    lastRun,
-    recentRuns: logs.slice(-10).map((log) => ({
-      finishedAt: log.finishedAt,
-      event: log.event,
-      status: log.status,
-      trigger: log.trigger,
-      shows: log.shows,
-      performances: log.performances,
-      newPerformances: log.newPerformances,
-      failureKind: log.failureKind,
-      message: log.message
-    }))
-  };
-}
-
-async function sendOfferNotification(
-  env: Env,
-  run: RunLog,
-  offers: TdfOffer[],
-  items: Array<{ id: string; title: string; facility: string; performanceDate: string }>,
-  filename: string,
-  caption: string
-): Promise<boolean> {
-  const sendStarted = Date.now();
-  try {
-    await sendMessage(env, formatSummary(offers, items));
-    addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
-  } catch (error) {
-    addStep(run, "send-telegram-summary", "failure", {
-      durationMs: Date.now() - sendStarted,
-      message: errorMessage(error)
-    });
-    throw error;
-  }
-
-  const documentStarted = Date.now();
-  try {
-    await sendDocument(env, filename, formatDetails(offers, items), caption);
-    addStep(run, "send-telegram-document", "success", {
-      durationMs: Date.now() - documentStarted
-    });
-  } catch (error) {
-    addStep(run, "send-telegram-document", "failure", {
-      durationMs: Date.now() - documentStarted,
-      message: errorMessage(error)
-    });
-  }
-
-  return true;
-}
-
-async function checkStaleHealth(env: Env, run: RunLog): Promise<void> {
-  const logs = await readLogs(env);
-  const lastSuccess = [...logs]
-    .reverse()
-    .find((log) => log.event === "delta" && log.status === "success");
-  if (!lastSuccess) {
-    addStep(run, "stale-health-check", "skipped", { reason: "No previous successful delta run." });
-    return;
-  }
-
-  const ageMs = Date.now() - new Date(lastSuccess.finishedAt).valueOf();
-  if (ageMs < staleSuccessAlertAfterMs) {
-    addStep(run, "stale-health-check", "success", {
-      lastSuccessAt: lastSuccess.finishedAt,
-      ageMs
-    });
-    return;
-  }
-
-  addStep(run, "stale-health-check", "failure", {
-    lastSuccessAt: lastSuccess.finishedAt,
-    ageMs,
-    reason: "Previous successful delta run is stale."
-  });
 }
