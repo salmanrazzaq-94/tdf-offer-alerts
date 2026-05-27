@@ -4,7 +4,7 @@ import {
   runDebug,
   runLogs,
   runStatus
-} from "./runs.js";
+} from "./commands.js";
 import type { Env, TelegramUpdate } from "./types.js";
 import { errorMessage, sanitizeUnknown, TdfError } from "./utils.js";
 
