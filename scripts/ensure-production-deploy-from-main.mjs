@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 const productionBranch = "main";
 const productionRemote = "origin";
 const productionRef = `${productionRemote}/${productionBranch}`;
+const productionGitHubRef = `refs/heads/${productionBranch}`;
 
 function runGit(args) {
   return execFileSync("git", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
@@ -12,8 +13,20 @@ function runGit(args) {
 
 function fail(message) {
   console.error(`Production deploy blocked: ${message}`);
-  console.error(`Deploy production only from a clean checkout at ${productionRef}.`);
+  console.error(`Deploy production only from the GitHub Actions push workflow for ${productionRef}.`);
   process.exit(1);
+}
+
+if (process.env.GITHUB_ACTIONS !== "true") {
+  fail("not running in GitHub Actions");
+}
+
+if (process.env.GITHUB_EVENT_NAME !== "push") {
+  fail(`GitHub event is ${process.env.GITHUB_EVENT_NAME || "unknown"}, not push`);
+}
+
+if (process.env.GITHUB_REF !== productionGitHubRef) {
+  fail(`GitHub ref is ${process.env.GITHUB_REF || "unknown"}, not ${productionGitHubRef}`);
 }
 
 const branch = process.env.GITHUB_REF_NAME || runGit(["branch", "--show-current"]);
