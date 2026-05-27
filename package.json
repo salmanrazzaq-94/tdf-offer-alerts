@@ -11,7 +11,8 @@
     "login:local": "tsc --noEmit false && node --env-file=.env dist/src/login-local.js",
     "login:browserbase": "tsc --noEmit false && node --env-file=.env dist/src/login-browserbase.js",
     "install-browser": "playwright install chromium",
-    "worker:deploy": "wrangler deploy"
+    "worker:dry-run": "wrangler deploy --dry-run",
+    "worker:deploy": "node scripts/ensure-production-deploy-from-main.mjs && wrangler deploy"
   },
   "dependencies": {
     "@browserbasehq/sdk": "^2.12.0",

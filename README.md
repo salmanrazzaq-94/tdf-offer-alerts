@@ -200,13 +200,30 @@ Run tests:
 ```sh
 npm run check
 npm test
+npm run worker:dry-run
 ```
 
-Deploy Worker:
+Test Worker changes on a PR without deploying production:
+
+```sh
+npm run worker:dry-run
+```
+
+Deploy production Worker:
+
+Production deploys are handled by the `Deploy Worker` GitHub Actions workflow
+after changes land on `main`. The workflow repeats `check`, `test`, and
+`worker:dry-run` before running Wrangler.
+
+For emergency local deploys only:
 
 ```sh
 npm run worker:deploy
 ```
+
+That command refuses to run unless the checkout is clean, on `main`, and at the
+same commit as `origin/main`. PR branches should use `worker:dry-run` for Worker
+validation before merge.
 
 ## Required Secrets
 
@@ -308,6 +325,8 @@ Keep these out of git:
 - `BROWSERBASE_CONTEXT_ID`
 - `TDF_EMAIL`
 - `TDF_PASSWORD`
+- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_ACCOUNT_ID`
 
 Never commit `.env`, exported cookies, logged-in screenshots, or browser storage files.
 
