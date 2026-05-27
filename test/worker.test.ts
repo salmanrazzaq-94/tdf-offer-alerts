@@ -68,6 +68,15 @@ function response(body: BodyInit | null, init: ResponseInit & { url?: string } =
   return result;
 }
 
+function contextWithTasks(tasks: Array<Promise<unknown>>): ExecutionContext {
+  return {
+    waitUntil(task: Promise<unknown>): void {
+      tasks.push(task);
+    },
+    passThroughOnException(): void {}
+  } as ExecutionContext;
+}
+
 test("delta run touches main page, merges refreshed cookies, and skips old offers", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session; anti=old");
@@ -239,6 +248,47 @@ test("Browserbase refresh failure callback sends the Telegram attention message"
   }
 });
 
+test("duplicate Browserbase refresh failure callbacks are throttled", async () => {
+  const kv = new MemoryKV();
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url.includes("api.telegram.org")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    for (let index = 0; index < 2; index += 1) {
+      await worker.fetch(
+        new Request("https://worker.test/refresh-failed?token=form-token", {
+          method: "POST",
+          body: JSON.stringify({
+            reason: "Browserbase could not log in.",
+            source_run_id: `worker-run-${index}`
+          }),
+          headers: { "content-type": "application/json" }
+        }),
+        env(kv),
+        {} as ExecutionContext
+      );
+    }
+
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 1);
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      notificationSent?: boolean;
+      steps: Array<{ name: string; status: string }>;
+    }>;
+    assert.equal(logs.at(-1)?.notificationSent, false);
+    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "send-browserbase-refresh-failed:skipped"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("delta prunes unavailable performances so returned offers alert again", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
@@ -345,6 +395,156 @@ test("recent auth failure does not dispatch Browserbase refresh again", async ()
   }
 });
 
+test("telegram offers command starts Browserbase recovery without Telegram noise on auth failure", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  const calls: string[] = [];
+  const tasks: Array<Promise<unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>login</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/account/login"
+      });
+    }
+    if (url.includes("api.github.com")) {
+      return response(null, { status: 204, url });
+    }
+    if (url.includes("api.telegram.org")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    await worker.fetch(
+      new Request("https://worker.test/telegram", {
+        method: "POST",
+        body: JSON.stringify({ message: { text: "/offers", chat: { id: 123 } } }),
+        headers: { "content-type": "application/json" }
+      }),
+      env(kv),
+      contextWithTasks(tasks)
+    );
+    await Promise.all(tasks);
+
+    assert.equal(calls.filter((url) => url.includes("api.github.com")).length, 1);
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      event: string;
+      status: string;
+      notificationSent?: boolean;
+      steps: Array<{ name: string; status: string }>;
+    }>;
+    assert.equal(logs.at(-1)?.event, "command");
+    assert.equal(logs.at(-1)?.status, "failure");
+    assert.equal(logs.at(-1)?.notificationSent, false);
+    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "browserbase-refresh-dispatch:success"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("telegram status command starts Browserbase recovery without Telegram noise on auth failure", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  const calls: string[] = [];
+  const tasks: Array<Promise<unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>login</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/account/login"
+      });
+    }
+    if (url.includes("api.github.com")) {
+      return response(null, { status: 204, url });
+    }
+    if (url.includes("api.telegram.org")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    await worker.fetch(
+      new Request("https://worker.test/telegram", {
+        method: "POST",
+        body: JSON.stringify({ message: { text: "/status", chat: { id: 123 } } }),
+        headers: { "content-type": "application/json" }
+      }),
+      env(kv),
+      contextWithTasks(tasks)
+    );
+    await Promise.all(tasks);
+
+    assert.equal(calls.filter((url) => url.includes("api.github.com")).length, 1);
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      event: string;
+      status: string;
+      notificationSent?: boolean;
+      steps: Array<{ name: string; status: string }>;
+    }>;
+    assert.equal(logs.at(-1)?.event, "status");
+    assert.equal(logs.at(-1)?.status, "failure");
+    assert.equal(logs.at(-1)?.notificationSent, false);
+    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "browserbase-refresh-dispatch:success"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("dispatch failure sends a clear recovery attention message", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  const calls: Array<{ url: string; body?: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+    if (url === "https://my.tdf.org/") {
+      return response("<html>login</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/account/login"
+      });
+    }
+    if (url.includes("api.github.com")) {
+      return response('{"message":"Workflow does not have workflow_dispatch trigger"}', {
+        status: 422,
+        url
+      });
+    }
+    if (url.includes("api.telegram.org")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    await worker.fetch(
+      new Request("https://worker.test/run-delta?token=form-token"),
+      env(kv),
+      {} as ExecutionContext
+    );
+
+    const telegramBody = calls.find((call) => call.url.includes("api.telegram.org"))?.body ?? "";
+    assert.match(telegramBody, /Automatic TDF login recovery could not start/);
+    assert.doesNotMatch(telegramBody, new RegExp("Use Browserbase refresh or send /cookie"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("verify-cookie validates the saved cookie without sending Telegram", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
@@ -395,6 +595,163 @@ test("verify-cookie validates the saved cookie without sending Telegram", async 
   }
 });
 
+test("verify-cookie recovers when stored run logs are corrupted", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  await kv.put("RUN_LOGS", "{not-json");
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await worker.fetch(
+      new Request("https://worker.test/verify-cookie?token=form-token"),
+      env(kv),
+      {} as ExecutionContext
+    );
+    const body = (await result.json()) as { status: string };
+    assert.equal(body.status, "success");
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ event: string }>;
+    assert.equal(logs.at(-1)?.event, "verify");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("delta recovers corrupted seen state without sending a full-current spam alert", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  await kv.put("SEEN_OFFERS", "{not-json");
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url.includes("api.telegram.org")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await worker.fetch(
+      new Request("https://worker.test/run-delta?token=form-token"),
+      env(kv),
+      {} as ExecutionContext
+    );
+    const body = (await result.json()) as { status: string; newPerformances: number };
+    assert.equal(body.status, "success");
+    assert.equal(body.newPerformances, 0);
+    assert.deepEqual(JSON.parse(kv.values.get("SEEN_OFFERS") ?? "[]"), ["1:10"]);
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("delta does not fail or send a misleading auth alert when details document upload fails after summary", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  await kv.put("SEEN_OFFERS", JSON.stringify([]));
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    if (url.includes("sendMessage")) {
+      return response('{"ok":true}', { status: 200, url });
+    }
+    if (url.includes("sendDocument")) {
+      return response("telegram document failed", { status: 500, url });
+    }
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await worker.fetch(
+      new Request("https://worker.test/run-delta?token=form-token"),
+      env(kv),
+      {} as ExecutionContext
+    );
+    const body = (await result.json()) as { status: string; notificationSent: boolean };
+    assert.equal(body.status, "success");
+    assert.equal(body.notificationSent, true);
+    assert.equal(calls.filter((url) => url.includes("sendMessage")).length, 1);
+    assert.equal(calls.filter((url) => url.includes("sendDocument")).length, 1);
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      steps: Array<{ name: string; status: string }>;
+    }>;
+    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:failure"));
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("debug endpoint returns cookie, auth, and recent run diagnostics", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
@@ -429,7 +786,7 @@ test("debug endpoint returns cookie, auth, and recent run diagnostics", async ()
     cookie: { hasSessionCookie: boolean; hasTnewCookie: boolean };
     recentRuns: Array<{ event: string; status: string }>;
   };
-  assert.match(body.version, /cloudflare-core/);
+  assert.match(body.version, /production-hardening/);
   assert.equal(body.cookie.hasSessionCookie, true);
   assert.equal(body.cookie.hasTnewCookie, true);
   assert.deepEqual(body.recentRuns, [{ finishedAt: "2026-05-23T12:00:01.000Z", event: "delta", status: "success", trigger: "test", shows: 1, performances: 1, newPerformances: 0 }]);

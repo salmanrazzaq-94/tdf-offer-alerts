@@ -73,6 +73,7 @@ type AuthState = {
   lastFailureKind: string | null;
   lastFailureReason: string | null;
   lastRefreshAttemptedAt: string | null;
+  lastRefreshAttemptStatus: BrowserbaseRefreshResult["status"] | null;
 };
 
 type CookieMeta = {
@@ -90,6 +91,7 @@ type HealthState = {
 type BrowserbaseRefreshResult = {
   status: "started" | "throttled" | "not-auth" | "not-configured" | "dispatch-failed";
   attemptedAt?: string;
+  failureReason?: string;
 };
 
 type DebugSnapshot = {
@@ -111,12 +113,13 @@ const logsKey = "RUN_LOGS";
 const authStateKey = "AUTH_STATE";
 const healthStateKey = "HEALTH_STATE";
 const deltaLockKey = "DELTA_LOCK";
-const workerVersion = "2026-05-23.cloudflare-core-v2";
+const workerVersion = "2026-05-27.production-hardening-v1";
 const tdfOffersUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
 const tdfPerformancesUrl = "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
 const tdfMemberHomeUrl = "https://my.tdf.org/";
 const authFailureNotifyIntervalMs = 12 * 60 * 60 * 1000;
 const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
+const browserbaseDispatchFailureRetryMs = 30 * 60 * 1000;
 const staleSuccessAlertAfterMs = 30 * 60 * 1000;
 const deltaLockTtlMs = 8 * 60 * 1000;
 const maxLogs = 200;
@@ -296,31 +299,32 @@ async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> {
     await persistRefreshedCookie(env, cookie, result.cookie, run);
     const offers = result.offers;
     const items = flattenOffers(offers);
-    const seen = await readSeen(env, run);
-    const newItems = items.filter((item) => !seen.has(item.id));
+    const seenResult = await readSeen(env, run);
+    const newItems = seenResult.recovered
+      ? []
+      : items.filter((item) => !seenResult.seen.has(item.id));
     addStep(run, "diff-offers", "success", {
-      seenBefore: seen.size,
+      seenBefore: seenResult.seen.size,
       currentPerformances: items.length,
-      newPerformances: newItems.length
+      newPerformances: newItems.length,
+      recoveredSeenState: seenResult.recovered
     });
 
     if (newItems.length > 0) {
-      const sendStarted = Date.now();
-      await sendMessage(env, formatSummary(offers, newItems));
-      addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
-      const documentStarted = Date.now();
-      await sendDocument(
+      notificationSent = await sendOfferNotification(
         env,
+        run,
+        offers,
+        newItems,
         timestampedFilename("tdf-offers-delta"),
-        formatDetails(offers, newItems),
         "Full TDF availability details"
       );
-      addStep(run, "send-telegram-document", "success", {
-        durationMs: Date.now() - documentStarted
-      });
-      notificationSent = true;
     } else {
-      addStep(run, "send-delta-alert", "skipped", { reason: "No new performances." });
+      addStep(run, "send-delta-alert", "skipped", {
+        reason: seenResult.recovered
+          ? "Seen state was recovered from the current TDF snapshot."
+          : "No new performances."
+      });
     }
 
     await writeSeen(env, new Set(items.map((item) => item.id)), run);
@@ -373,24 +377,19 @@ async function runDailyDigest(env: Env, trigger: string): Promise<RunLog> {
     await persistRefreshedCookie(env, cookie, result.cookie, run);
     const offers = result.offers;
     const items = flattenOffers(offers);
-    const sendStarted = Date.now();
-    await sendMessage(env, formatSummary(offers, items));
-    addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
-    const documentStarted = Date.now();
-    await sendDocument(
+    const notificationSent = await sendOfferNotification(
       env,
+      run,
+      offers,
+      items,
       timestampedFilename("tdf-offers-current"),
-      formatDetails(offers, []),
       "Current TDF availability details"
     );
-    addStep(run, "send-telegram-document", "success", {
-      durationMs: Date.now() - documentStarted
-    });
     await clearAuthState(env, run);
     finishRun(run, "success", {
       shows: offers.length,
       performances: items.length,
-      notificationSent: true
+      notificationSent
     });
   } catch (error) {
     await handleCheckFailure(env, run, error);
@@ -408,31 +407,21 @@ async function runCommandOffers(env: Env): Promise<void> {
     await persistRefreshedCookie(env, cookie, result.cookie, run);
     const offers = result.offers;
     const items = flattenOffers(offers);
-    const sendStarted = Date.now();
-    await sendMessage(env, formatSummary(offers, items));
-    addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
-    const documentStarted = Date.now();
-    await sendDocument(
+    const notificationSent = await sendOfferNotification(
       env,
+      run,
+      offers,
+      items,
       timestampedFilename("tdf-offers-command"),
-      formatDetails(offers, []),
       "Latest TDF availability details"
     );
-    addStep(run, "send-telegram-document", "success", {
-      durationMs: Date.now() - documentStarted
-    });
     finishRun(run, "success", {
       shows: offers.length,
       performances: items.length,
-      notificationSent: true
+      notificationSent
     });
   } catch (error) {
-    await sendMessage(env, `TDF authentication needs attention.\n${errorMessage(error)}\nUse Browserbase refresh or send /cookie.`);
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error),
-      notificationSent: true
-    });
+    await handleCheckFailure(env, run, error);
   }
   await appendLog(env, run);
 }
@@ -453,12 +442,7 @@ async function runStatus(env: Env): Promise<void> {
       notificationSent: true
     });
   } catch (error) {
-    await sendMessage(env, `TDF cookie is not working.\n${errorMessage(error)}`);
-    finishRun(run, "failure", {
-      failureKind: classifyError(error),
-      message: errorMessage(error),
-      notificationSent: true
-    });
+    await handleCheckFailure(env, run, error);
   }
   await appendLog(env, run);
 }
@@ -505,7 +489,8 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
       lastFailureNotifiedAt: notifyNow ? new Date().toISOString() : state.lastFailureNotifiedAt,
       lastFailureKind: kind,
       lastFailureReason: message,
-      lastRefreshAttemptedAt: refreshResult.attemptedAt ?? state.lastRefreshAttemptedAt
+      lastRefreshAttemptedAt: refreshResult.attemptedAt ?? state.lastRefreshAttemptedAt,
+      lastRefreshAttemptStatus: refreshResult.status
     })
   );
   addStep(run, "failure-notification-throttle", "success", {
@@ -519,12 +504,7 @@ async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promis
 
   if (notifyNow) {
     const sendStarted = Date.now();
-    await sendMessage(
-      env,
-      kind === "transient"
-        ? `<b>TDF checker temporary failure</b>\nThe next run will try again.\n${escapeHtml(message)}`
-        : `<b>TDF login needs attention</b>\nSaved cookie no longer works.\nUse Browserbase refresh or send /cookie.\n${escapeHtml(message)}`
-    );
+    await sendMessage(env, formatFailureMessage(kind, message, refreshResult));
     addStep(run, "send-telegram-failure", "success", { durationMs: Date.now() - sendStarted });
   } else {
     addStep(run, "send-telegram-failure", "skipped", {
@@ -547,39 +527,56 @@ async function recordBrowserbaseRefreshFailure(request: Request, env: Env): Prom
   const reason = details.reason || "Browserbase refresh workflow failed.";
   const sourceRunId = details.source_run_id || details.sourceRunId;
   const state = await readAuthState(env);
+  const lastNotifiedAt = state.lastFailureNotifiedAt
+    ? new Date(state.lastFailureNotifiedAt).valueOf()
+    : 0;
+  const shouldNotify =
+    state.lastFailureKind !== "auth" ||
+    state.lastFailureReason !== reason ||
+    !lastNotifiedAt ||
+    Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs;
 
   await env.TDF_ALERTS.put(
     authStateKey,
     JSON.stringify({
-      lastFailureNotifiedAt: new Date().toISOString(),
+      lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
       lastFailureKind: "auth",
       lastFailureReason: reason,
-      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
+      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt,
+      lastRefreshAttemptStatus: state.lastRefreshAttemptStatus
     } satisfies AuthState)
   );
 
-  const sendStarted = Date.now();
-  await sendMessage(
-    env,
-    [
-      "<b>Browserbase refresh failed</b>",
-      "Automatic TDF login recovery did not complete.",
-      escapeHtml(reason),
-      sourceRunId ? `source=${escapeHtml(sourceRunId)}` : "",
-      "Send /cookie to paste a fresh TDF cookie."
-    ]
-      .filter(Boolean)
-      .join("\n")
-  );
-  addStep(run, "send-browserbase-refresh-failed", "success", {
-    durationMs: Date.now() - sendStarted,
-    sourceRunId
-  });
+  if (shouldNotify) {
+    const sendStarted = Date.now();
+    await sendMessage(
+      env,
+      [
+        "<b>Browserbase refresh failed</b>",
+        "Automatic TDF login recovery did not complete.",
+        escapeHtml(reason),
+        sourceRunId ? `source=${escapeHtml(sourceRunId)}` : "",
+        "Send /cookie to paste a fresh TDF cookie."
+      ]
+        .filter(Boolean)
+        .join("\n")
+    );
+    addStep(run, "send-browserbase-refresh-failed", "success", {
+      durationMs: Date.now() - sendStarted,
+      sourceRunId
+    });
+  } else {
+    addStep(run, "send-browserbase-refresh-failed", "skipped", {
+      reason: "Repeated Browserbase failure notification is throttled.",
+      sourceRunId,
+      lastFailureNotifiedAt: state.lastFailureNotifiedAt
+    });
+  }
 
   finishRun(run, "failure", {
     failureKind: "auth",
     message: reason,
-    notificationSent: true
+    notificationSent: shouldNotify
   });
   await appendLog(env, run);
   return run;
@@ -835,7 +832,12 @@ async function readCookieMeta(env: Env): Promise<CookieMeta> {
       hasTnewCookie: cookie?.includes("TNEW") ?? false
     };
   }
-  const parsed = JSON.parse(raw) as Partial<CookieMeta>;
+  let parsed: Partial<CookieMeta>;
+  try {
+    parsed = JSON.parse(raw) as Partial<CookieMeta>;
+  } catch {
+    parsed = {};
+  }
   return {
     savedAt: parsed.savedAt ?? null,
     source: parsed.source ?? null,
@@ -845,15 +847,67 @@ async function readCookieMeta(env: Env): Promise<CookieMeta> {
   };
 }
 
-async function readSeen(env: Env, run: RunLog): Promise<Set<string>> {
+async function sendOfferNotification(
+  env: Env,
+  run: RunLog,
+  offers: TdfOffer[],
+  items: AlertItem[],
+  filename: string,
+  caption: string
+): Promise<boolean> {
+  const sendStarted = Date.now();
+  await sendMessage(env, formatSummary(offers, items));
+  addStep(run, "send-telegram-summary", "success", { durationMs: Date.now() - sendStarted });
+
+  const documentStarted = Date.now();
+  try {
+    await sendDocument(env, filename, formatDetails(offers, items), caption);
+    addStep(run, "send-telegram-document", "success", {
+      durationMs: Date.now() - documentStarted
+    });
+  } catch (error) {
+    addStep(run, "send-telegram-document", "failure", {
+      durationMs: Date.now() - documentStarted,
+      message: errorMessage(error)
+    });
+  }
+
+  return true;
+}
+
+async function readSeen(
+  env: Env,
+  run: RunLog
+): Promise<{ seen: Set<string>; recovered: boolean }> {
   const started = Date.now();
   const raw = await env.TDF_ALERTS.get(seenKey);
-  const seen = raw ? parseSeen(raw) : new Set<string>();
+  if (!raw) {
+    addStep(run, "read-seen-state", "success", {
+      durationMs: Date.now() - started,
+      seenCount: 0,
+      recovered: false
+    });
+    return { seen: new Set<string>(), recovered: false };
+  }
+
+  let seen: Set<string>;
+  try {
+    seen = parseSeen(raw);
+  } catch (error) {
+    addStep(run, "read-seen-state", "failure", {
+      durationMs: Date.now() - started,
+      message: errorMessage(error),
+      recovered: true
+    });
+    return { seen: new Set<string>(), recovered: true };
+  }
+
   addStep(run, "read-seen-state", "success", {
     durationMs: Date.now() - started,
-    seenCount: seen.size
+    seenCount: seen.size,
+    recovered: false
   });
-  return seen;
+  return { seen, recovered: false };
 }
 
 async function writeSeen(env: Env, seen: Set<string>, run: RunLog): Promise<void> {
@@ -872,15 +926,22 @@ async function readAuthState(env: Env): Promise<AuthState> {
       lastFailureNotifiedAt: null,
       lastFailureKind: null,
       lastFailureReason: null,
-      lastRefreshAttemptedAt: null
+      lastRefreshAttemptedAt: null,
+      lastRefreshAttemptStatus: null
     };
   }
-  const parsed = JSON.parse(raw) as Partial<AuthState>;
+  let parsed: Partial<AuthState>;
+  try {
+    parsed = JSON.parse(raw) as Partial<AuthState>;
+  } catch {
+    parsed = {};
+  }
   return {
     lastFailureNotifiedAt: parsed.lastFailureNotifiedAt ?? null,
     lastFailureKind: parsed.lastFailureKind ?? null,
     lastFailureReason: parsed.lastFailureReason ?? null,
-    lastRefreshAttemptedAt: parsed.lastRefreshAttemptedAt ?? null
+    lastRefreshAttemptedAt: parsed.lastRefreshAttemptedAt ?? null,
+    lastRefreshAttemptStatus: parsed.lastRefreshAttemptStatus ?? null
   };
 }
 
@@ -891,7 +952,8 @@ async function clearAuthState(env: Env, run: RunLog): Promise<void> {
       lastFailureNotifiedAt: null,
       lastFailureKind: null,
       lastFailureReason: null,
-      lastRefreshAttemptedAt: null
+      lastRefreshAttemptedAt: null,
+      lastRefreshAttemptStatus: null
     })
   );
   addStep(run, "clear-auth-state", "success");
@@ -921,10 +983,16 @@ async function maybeTriggerBrowserbaseRefresh(
   const lastAttemptedAt = state.lastRefreshAttemptedAt
     ? new Date(state.lastRefreshAttemptedAt).valueOf()
     : 0;
-  if (lastAttemptedAt && Date.now() - lastAttemptedAt < browserbaseRefreshAttemptIntervalMs) {
+  const throttleMs =
+    state.lastRefreshAttemptStatus === "dispatch-failed"
+      ? browserbaseDispatchFailureRetryMs
+      : browserbaseRefreshAttemptIntervalMs;
+  if (lastAttemptedAt && Date.now() - lastAttemptedAt < throttleMs) {
     addStep(run, "browserbase-refresh-dispatch", "skipped", {
       reason: "Recent Browserbase refresh attempt is still inside throttle window.",
-      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt
+      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt,
+      lastRefreshAttemptStatus: state.lastRefreshAttemptStatus,
+      throttleMs
     });
     return { status: "throttled" };
   }
@@ -951,12 +1019,19 @@ async function maybeTriggerBrowserbaseRefresh(
   );
 
   if (!response.ok) {
+    const body = (await response.text()).slice(0, 300);
+    const attemptedAt = new Date().toISOString();
     addStep(run, "browserbase-refresh-dispatch", "failure", {
       durationMs: Date.now() - started,
       status: response.status,
-      body: (await response.text()).slice(0, 300)
+      body,
+      lastRefreshAttemptedAt: attemptedAt
     });
-    return { status: "dispatch-failed" };
+    return {
+      status: "dispatch-failed",
+      attemptedAt,
+      failureReason: `GitHub dispatch returned ${response.status}: ${body}`
+    };
   }
 
   const attemptedAt = new Date().toISOString();
@@ -1053,7 +1128,12 @@ async function readHealthState(env: Env): Promise<HealthState> {
   if (!raw) {
     return { lastStaleNotifiedAt: null };
   }
-  const parsed = JSON.parse(raw) as Partial<HealthState>;
+  let parsed: Partial<HealthState>;
+  try {
+    parsed = JSON.parse(raw) as Partial<HealthState>;
+  } catch {
+    parsed = {};
+  }
   return { lastStaleNotifiedAt: parsed.lastStaleNotifiedAt ?? null };
 }
 
@@ -1095,7 +1175,12 @@ async function readLogs(env: Env): Promise<RunLog[]> {
   if (!raw) {
     return [];
   }
-  return JSON.parse(raw) as RunLog[];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as RunLog[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 async function appendLog(env: Env, run: RunLog): Promise<void> {
@@ -1264,6 +1349,47 @@ function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {
   ].join("\n");
 }
 
+function formatFailureMessage(
+  kind: TdfError["kind"],
+  message: string,
+  refreshResult: BrowserbaseRefreshResult
+): string {
+  if (kind === "transient") {
+    return [
+      "<b>TDF checker temporary failure</b>",
+      "The next run will try again.",
+      escapeHtml(message)
+    ].join("\n");
+  }
+
+  if (kind === "auth" && refreshResult.status === "dispatch-failed") {
+    return [
+      "<b>TDF bot needs attention</b>",
+      "Automatic TDF login recovery could not start.",
+      "I could not trigger the Browserbase refresh workflow.",
+      refreshResult.failureReason ? escapeHtml(refreshResult.failureReason) : "",
+      escapeHtml(message)
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  if (kind === "auth") {
+    return [
+      "<b>TDF login needs attention</b>",
+      "Saved cookie no longer works.",
+      "Automatic recovery is not configured, so Salman needs to refresh the login.",
+      escapeHtml(message)
+    ].join("\n");
+  }
+
+  return [
+    "<b>TDF checker failed</b>",
+    "The saved TDF login may still be fine, but the checker hit an unexpected error.",
+    escapeHtml(message)
+  ].join("\n");
+}
+
 function formatDebug(snapshot: DebugSnapshot): string {
   return [
     "<b>TDF Debug</b>",
@@ -1354,7 +1480,7 @@ function normalizeCookie(cookie: string): string {
 }
 
 function isAuthorized(url: URL, env: Env): boolean {
-  return url.searchParams.get("token") === env.COOKIE_FORM_TOKEN;
+  return Boolean(env.COOKIE_FORM_TOKEN) && url.searchParams.get("token") === env.COOKIE_FORM_TOKEN;
 }
 
 function countPerformances(offers: TdfOffer[]): number {
