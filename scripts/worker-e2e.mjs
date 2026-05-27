@@ -2,6 +2,24 @@
 
 import { readFileSync } from "node:fs";
 
+class MemoryKV {
+  constructor() {
+    this.values = new Map();
+  }
+
+  async get(key) {
+    return this.values.get(key) ?? null;
+  }
+
+  async put(key, value) {
+    this.values.set(key, value);
+  }
+
+  async delete(key) {
+    this.values.delete(key);
+  }
+}
+
 const localMode = process.env.E2E_LOCAL_WORKER === "true";
 const baseUrl = (process.env.E2E_WORKER_BASE_URL ?? "https://worker.e2e.test").replace(/\/$/, "");
 const token = required("E2E_COOKIE_FORM_TOKEN");
@@ -233,24 +251,6 @@ async function createLocalWorkerClient() {
       return response;
     }
   };
-}
-
-class MemoryKV {
-  constructor() {
-    this.values = new Map();
-  }
-
-  async get(key) {
-    return this.values.get(key) ?? null;
-  }
-
-  async put(key, value) {
-    this.values.set(key, value);
-  }
-
-  async delete(key) {
-    this.values.delete(key);
-  }
 }
 
 async function waitForLog(predicate) {
