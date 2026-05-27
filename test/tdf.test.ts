@@ -86,3 +86,37 @@ test("normalizes seen state", () => {
   assert.deepEqual(parseSeenState({ seen: ["b", "a", "a"] }), { seen: ["a", "b"] });
   assert.throws(() => parseSeenState({ seen: [123] }), /non-string/);
 });
+
+test("rejects malformed TDF offer payloads before flattening alerts", () => {
+  assert.throws(() => parseTdfOffers({}), /not a JSON array/);
+  assert.throws(() => parseTdfOffers([null]), /not an object/);
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], productionSeasonId: Number.POSITIVE_INFINITY }]),
+    /invalid productionSeasonId/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], title: 123 }]),
+    /invalid title/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], performances: [null] }]),
+    /Performance at index 0\.0 was not an object/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], performances: [{ performanceId: 1, performanceDate: 123 }] }]),
+    /invalid performanceDate/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], keywords: [null] }]),
+    /keywords at index 0\.0 was not an object/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], promotions: "bad" }]),
+    /invalid promotions/
+  );
+  assert.throws(
+    () => parseTdfOffers([{ ...sampleResponse[0], isNew: "yes" }]),
+    /invalid isNew/
+  );
+  assert.throws(() => parseSeenState(null), /seen array/);
+});
