@@ -1,6 +1,6 @@
-# Sanitized Telegram Examples
+# Sanitized Telegram And Operator Examples
 
-These examples show the shape of the bot output without real account data, chat ids, cookies, or live TDF inventory.
+These examples show the shape of bot output and operator HTTP diagnostics without real account data, chat ids, cookies, tokens, or live TDF inventory.
 
 ## New Offers Alert
 
@@ -50,28 +50,16 @@ Browserbase refresh attempted: none
 Worker: 2026-05-27.production-hardening-v1
 ```
 
-## `/debug`
+## Operator `/debug?token=...`
 
 ```text
-TDF Debug
-generated=2026-05-27T01:52:05.000Z
-version=2026-05-27.production-hardening-v1
-
-Cookie
-saved=2026-05-27T01:42:10.000Z
-source=tdf-set-cookie
-bytes=247
-hasSession=true
-hasExpectedSessionCookie=true
-
-Recovery
-lastFailure=none
-lastFailureAt=none
-lastRefreshAttempt=none
-
-Recent
-2026-05-27T01:50:02.000Z delta/success shows=4 perf=21 new=0
-2026-05-27T01:40:02.000Z delta/success shows=4 perf=21 new=2
+{
+  "version": "2026-05-27.production-hardening-v1",
+  "cookie": { "savedAt": "2026-05-27T01:42:10.000Z", "source": "tdf-set-cookie" },
+  "auth": { "lastFailureKind": null, "lastRefreshAttemptStatus": null },
+  "health": { "lastDeltaSuccessAt": "2026-05-27T01:50:02.000Z" },
+  "lastFailure": null
+}
 ```
 
 ## Browserbase Refresh Failure Alert

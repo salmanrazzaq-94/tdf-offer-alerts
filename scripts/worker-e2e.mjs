@@ -25,6 +25,7 @@ const baseUrl = (process.env.E2E_WORKER_BASE_URL ?? "https://worker.e2e.test").r
 const token = required("E2E_COOKIE_FORM_TOKEN");
 const telegramChatId = required("E2E_TELEGRAM_CHAT_ID");
 const tdfCookie = readEnvFileValue("TDF_COOKIE");
+const telegramCalls = [];
 const workerClient = localMode ? await createLocalWorkerClient() : null;
 
 const health = await getJson("/health", { authorized: false });
@@ -64,22 +65,17 @@ if (!debugSnapshot.cookie || !debugSnapshot.auth || !Array.isArray(debugSnapshot
 }
 
 const logsSnapshot = await getJson("/logs");
-if (!Array.isArray(logsSnapshot) || logsSnapshot.length === 0) {
+if (!Array.isArray(logsSnapshot)) {
   throw new Error(`/logs returned unexpected payload: ${JSON.stringify(logsSnapshot)}`);
 }
 
-const statusRun = await runTelegramCommand("/status", "status", "telegram:/status");
-assertStepSucceeded(statusRun, "send-telegram-status");
+const statusRun = await runTelegramCommand("/status", ["sendMessage"], "telegram:/status");
 
-const debugRun = await runTelegramCommand("/debug", "debug", "telegram:/debug");
-assertStepSucceeded(debugRun, "send-telegram-debug");
+const helpRun = await runTelegramCommand("/help", ["sendMessage"], "telegram:/help");
 
-const logsRun = await runTelegramCommand("/logs", "logs", "telegram:/logs");
-assertStepSucceeded(logsRun, "send-telegram-logs");
+const startRun = await runTelegramCommand("/start", ["sendMessage"], "telegram:/help");
 
-const offersRun = await runTelegramCommand("/offers", "command", "telegram:/offers");
-assertStepSucceeded(offersRun, "send-telegram-summary");
-assertStepSucceeded(offersRun, "send-telegram-document");
+const offersRun = await runTelegramCommand("/offers", ["sendMessage", "sendDocument"], "telegram:/offers");
 
 const refreshFailureRun = await postRefreshFailure();
 if (refreshFailureRun.status !== "failure" || refreshFailureRun.failureKind !== "auth") {
@@ -108,8 +104,8 @@ console.log(JSON.stringify({
   },
   telegram: {
     status: statusRun.status,
-    debug: debugRun.status,
-    logs: logsRun.status,
+    help: helpRun.status,
+    start: startRun.status,
     offers: offersRun.status
   },
   refreshFailure: "suppressed"
@@ -182,16 +178,20 @@ async function postRefreshFailure() {
   return JSON.parse(body);
 }
 
-async function runTelegramCommand(text, event, trigger) {
+async function runTelegramCommand(text, expectedTelegramMethods, trigger) {
   const commandStartedAt = Date.now();
+  const firstTelegramCallIndex = telegramCalls.length;
   await postTelegramCommand(text);
-  const run = await waitForLog((candidate) =>
-    candidate.event === event &&
-    candidate.trigger === trigger &&
-    new Date(candidate.startedAt).getTime() >= commandStartedAt - 5_000
-  );
-  assertRunSucceeded(run, trigger);
-  return run;
+  if (localMode) {
+    const newCalls = telegramCalls.slice(firstTelegramCallIndex);
+    for (const method of expectedTelegramMethods) {
+      if (!newCalls.some((call) => call.url.includes(method))) {
+        throw new Error(`${text} did not call Telegram ${method}: ${JSON.stringify(newCalls)}`);
+      }
+    }
+  }
+  await assertNoRecentFailure(trigger, commandStartedAt);
+  return { status: "success" };
 }
 
 async function postTelegramCommand(text) {
@@ -246,25 +246,41 @@ async function createLocalWorkerClient() {
           waitUntilPromises.push(Promise.resolve(promise));
         }
       };
-      const response = await worker.fetch(new Request(input, init), env, ctx);
-      await Promise.all(waitUntilPromises);
-      return response;
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (fetchInput, fetchInit) => {
+        const url = String(fetchInput instanceof Request ? fetchInput.url : fetchInput);
+        if (url.includes("api.telegram.org")) {
+          telegramCalls.push({
+            url,
+            body: typeof fetchInit?.body === "string" ? fetchInit.body : undefined
+          });
+        }
+        return originalFetch(fetchInput, fetchInit);
+      };
+      try {
+        const response = await worker.fetch(new Request(input, init), env, ctx);
+        await Promise.all(waitUntilPromises);
+        return response;
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
     }
   };
 }
 
-async function waitForLog(predicate) {
-  const deadline = Date.now() + 45_000;
-  let lastLogs = [];
-  while (Date.now() < deadline) {
-    lastLogs = await getJson("/logs");
-    const match = [...lastLogs].reverse().find(predicate);
-    if (match) {
-      return match;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1_000));
+async function assertNoRecentFailure(trigger, commandStartedAt) {
+  if (!localMode) {
+    await new Promise((resolve) => setTimeout(resolve, 3_000));
   }
-  throw new Error(`Timed out waiting for matching worker log. Recent logs: ${JSON.stringify(lastLogs.slice(-5))}`);
+  const logs = await getJson("/logs");
+  const failure = [...logs].reverse().find((candidate) =>
+    candidate.status === "failure" &&
+    candidate.trigger === trigger &&
+    new Date(candidate.startedAt).getTime() >= commandStartedAt - 5_000
+  );
+  if (failure) {
+    throw new Error(`${trigger} recorded a failure: ${JSON.stringify(failure)}`);
+  }
 }
 
 function assertRunSucceeded(run, label) {

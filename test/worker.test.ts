@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import worker from "../worker/index.js";
+import { resetBrowserbaseRefreshMemoryForTest } from "../worker/recovery.js";
 
 const sampleOffers = [
   {
@@ -33,16 +34,19 @@ const returnedOffers = [
 
 class MemoryKV {
   readonly values = new Map<string, string>();
+  readonly writes: string[] = [];
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
   }
 
   async put(key: string, value: string): Promise<void> {
+    this.writes.push(key);
     this.values.set(key, value);
   }
 
   async delete(key: string): Promise<void> {
+    this.writes.push(key);
     this.values.delete(key);
   }
 }
@@ -84,6 +88,32 @@ function contextWithTasks(tasks: Array<Promise<unknown>>): ExecutionContext {
     },
     passThroughOnException(): void {}
   } as ExecutionContext;
+}
+
+async function captureRuntimeEvents(action: () => Promise<void>): Promise<Array<Record<string, unknown>>> {
+  const lines: string[] = [];
+  const originalLog = console.log;
+  console.log = (value?: unknown) => {
+    lines.push(String(value));
+  };
+  try {
+    await action();
+  } finally {
+    console.log = originalLog;
+  }
+  return lines.flatMap((line) => {
+    try {
+      return [JSON.parse(line) as Record<string, unknown>];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function lastRunEvent(events: Array<Record<string, unknown>>): Record<string, unknown> {
+  const event = events.filter((candidate) => candidate["event"] === "tdf-run-finished").at(-1);
+  assert.ok(event, "Expected a tdf-run-finished runtime event.");
+  return event;
 }
 
 test("delta run touches main page, merges refreshed cookies, and skips old offers", async () => {
@@ -131,18 +161,19 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; newPerformances: number };
+    const body = (await result.json()) as {
+      status: string;
+      newPerformances: number;
+      steps: Array<{ name: string; status: string }>;
+    };
     assert.equal(body.status, "success");
     assert.equal(body.newPerformances, 0);
     assert.match(kv.values.get("TDF_COOKIE") ?? "", /anti=fresh/);
     assert.match(kv.values.get("TDF_COOKIE") ?? "", /TNEW=member-fresh/);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
 
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      steps: Array<{ name: string; status: string }>;
-    }>;
     assert.deepEqual(
-      logs.at(-1)?.steps.map((step) => `${step.name}:${step.status}`),
+      body.steps.map((step) => `${step.name}:${step.status}`),
       [
         "read-cookie:success",
         "refresh-tdf-member-session:success",
@@ -152,16 +183,19 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
         "read-seen-state:success",
         "diff-offers:success",
         "send-delta-alert:skipped",
-        "write-seen-state:success",
-        "clear-auth-state:success"
+        "write-seen-state:skipped",
+        "clear-auth-state:skipped",
+        "write-health-state:success"
       ]
     );
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
 test("auth failure dispatches one automatic Browserbase refresh without Telegram noise", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: string[] = [];
@@ -212,6 +246,7 @@ test("auth failure dispatches one automatic Browserbase refresh without Telegram
 });
 
 test("auth failure without GitHub refresh config sends a manual recovery alert", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: Array<{ url: string; body: string | undefined }> = [];
@@ -326,7 +361,11 @@ test("Browserbase refresh failure callback accepts form payloads", async () => {
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; notificationSent: boolean };
+    const body = (await result.json()) as {
+      status: string;
+      notificationSent: boolean;
+      steps: Array<{ name: string; status: string }>;
+    };
     assert.equal(body.status, "failure");
     assert.equal(body.notificationSent, true);
     assert.match(calls.find((call) => call.url.includes("api.telegram.org"))?.body ?? "", /source=run-from-form/);
@@ -480,6 +519,7 @@ test("delta prunes unavailable performances so returned offers alert again", asy
 });
 
 test("recent auth failure does not dispatch Browserbase refresh again", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put(
@@ -525,6 +565,7 @@ test("recent auth failure does not dispatch Browserbase refresh again", async ()
 });
 
 test("telegram offers command starts Browserbase recovery without Telegram noise on auth failure", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: string[] = [];
@@ -579,6 +620,7 @@ test("telegram offers command starts Browserbase recovery without Telegram noise
 });
 
 test("telegram status command starts Browserbase recovery without Telegram noise on auth failure", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: string[] = [];
@@ -633,6 +675,7 @@ test("telegram status command starts Browserbase recovery without Telegram noise
 });
 
 test("dispatch failure sends a clear recovery attention message", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: Array<{ url: string; body: string | undefined }> = [];
@@ -717,8 +760,7 @@ test("verify-cookie validates the saved cookie without sending Telegram", async 
     assert.equal(body.shows, 1);
     assert.equal(body.performances, 1);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ event: string }>;
-    assert.equal(logs.at(-1)?.event, "verify");
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -763,8 +805,57 @@ test("verify-cookie recovers when stored run logs are corrupted", async () => {
     );
     const body = (await result.json()) as { status: string };
     assert.equal(body.status, "success");
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ event: string }>;
-    assert.equal(logs.at(-1)?.event, "verify");
+    assert.equal(kv.values.get("RUN_LOGS"), "{not-json");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("verify-cookie can run read-only for production smoke without KV writes", async () => {
+  const kv = new MemoryKV();
+  await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
+  kv.writes.length = 0;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://my.tdf.org/") {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: {
+          "content-type": "text/html",
+          "set-cookie": "TNEW=fresh; Path=/"
+        },
+        url: "https://my.tdf.org/events"
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
+      return response(JSON.stringify(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/TDFCustomOfferings/Current")) {
+      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await worker.fetch(
+      new Request("https://worker.test/verify-cookie?token=form-token&persist=false"),
+      env(kv),
+      {} as ExecutionContext
+    );
+    const body = (await result.json()) as { status: string; shows: number; performances: number };
+    assert.equal(body.status, "success");
+    assert.equal(body.shows, 1);
+    assert.equal(body.performances, 1);
+    assert.deepEqual(kv.writes, []);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -812,7 +903,11 @@ test("delta recovers corrupted seen state without sending a full-current spam al
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; newPerformances: number };
+    const body = (await result.json()) as {
+      status: string;
+      newPerformances: number;
+      steps: Array<{ name: string; status: string; details?: { attempt?: number } }>;
+    };
     assert.equal(body.status, "success");
     assert.equal(body.newPerformances, 0);
     assert.deepEqual(JSON.parse(kv.values.get("SEEN_OFFERS") ?? "[]"), ["1:10"]);
@@ -867,15 +962,17 @@ test("delta does not fail or send a misleading auth alert when details document 
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; notificationSent: boolean };
+    const body = (await result.json()) as {
+      status: string;
+      notificationSent: boolean;
+      steps: Array<{ name: string; status: string }>;
+    };
     assert.equal(body.status, "success");
     assert.equal(body.notificationSent, true);
     assert.equal(calls.filter((url) => url.includes("sendMessage")).length, 1);
     assert.equal(calls.filter((url) => url.includes("sendDocument")).length, 1);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:failure"));
+    assert.ok(body.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:failure"));
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1027,15 +1124,7 @@ test("cookie form validates and saves a working cookie end to end", async () => 
     assert.match(kv.values.get("TDF_COOKIE") ?? "", /anti=fresh/);
     assert.doesNotMatch(kv.values.get("TDF_COOKIE") ?? "", /^Cookie:/);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      event: string;
-      status: string;
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    assert.equal(logs.at(-1)?.event, "cookie");
-    assert.equal(logs.at(-1)?.status, "success");
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "save-cookie:success"));
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "clear-auth-state:success"));
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1085,19 +1174,19 @@ test("daily digest sends summary and details document for all current offers", a
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; performances: number; notificationSent: boolean };
+    const body = (await result.json()) as {
+      status: string;
+      performances: number;
+      notificationSent: boolean;
+      steps: Array<{ name: string; status: string }>;
+    };
     assert.equal(body.status, "success");
     assert.equal(body.performances, 2);
     assert.equal(body.notificationSent, true);
     assert.equal(calls.filter((call) => call.url.includes("sendMessage")).length, 1);
     assert.equal(calls.filter((call) => call.url.includes("sendDocument")).length, 1);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      event: string;
-      status: string;
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    assert.equal(logs.at(-1)?.event, "daily");
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:success"));
+    assert.ok(body.steps.some((step) => `${step.name}:${step.status}` === "send-telegram-document:success"));
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1145,14 +1234,16 @@ test("transient TDF performance failures retry before succeeding", async () => {
       env(kv),
       {} as ExecutionContext
     );
-    const body = (await result.json()) as { status: string; newPerformances: number };
+    const body = (await result.json()) as {
+      status: string;
+      newPerformances: number;
+      steps: Array<{ name: string; status: string; details?: { attempt?: number } }>;
+    };
     assert.equal(body.status, "success");
     assert.equal(body.newPerformances, 0);
     assert.equal(performanceAttempts, 2);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      steps: Array<{ name: string; status: string; details?: { attempt?: number } }>;
-    }>;
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "fetch-tdf-retry-wait:success" && step.details?.attempt === 1));
+    assert.ok(body.steps.some((step) => `${step.name}:${step.status}` === "fetch-tdf-retry-wait:success" && step.details?.attempt === 1));
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1207,26 +1298,8 @@ test("transient TDF failures exhaust retries and send a temporary failure alert"
   }
 });
 
-test("telegram utility commands send cookie link, help, logs, and debug messages", async () => {
+test("telegram utility commands send cookie link and help only", async () => {
   const kv = new MemoryKV();
-  await kv.put(
-    "RUN_LOGS",
-    JSON.stringify([
-      {
-        id: "run-1",
-        event: "delta",
-        status: "failure",
-        trigger: "cron",
-        startedAt: "2026-05-23T12:00:00.000Z",
-        finishedAt: "2026-05-23T12:00:01.000Z",
-        durationMs: 1000,
-        version: "test",
-        failureKind: "auth",
-        message: "login expired <retry>",
-        steps: []
-      }
-    ])
-  );
   const calls: Array<{ url: string; body: string | undefined }> = [];
   const tasks: Array<Promise<unknown>> = [];
   const originalFetch = globalThis.fetch;
@@ -1240,7 +1313,7 @@ test("telegram utility commands send cookie link, help, logs, and debug messages
   };
 
   try {
-    for (const text of ["/cookie", "/help", "/logs", "/debug"]) {
+    for (const text of ["/cookie", "/help", "/start"]) {
       await worker.fetch(
         new Request("https://worker.test/telegram", {
           method: "POST",
@@ -1255,12 +1328,10 @@ test("telegram utility commands send cookie link, help, logs, and debug messages
 
     const telegramBodies = calls.map((call) => call.body ?? "").join("\n");
     assert.match(telegramBodies, /Paste a fresh TDF cookie here/);
-    assert.match(telegramBodies, /Commands: \/offers, \/status, \/debug, \/logs, \/cookie/);
-    assert.match(telegramBodies, /Recent TDF Logs/);
-    assert.match(telegramBodies, /login expired &lt;retry&gt;/);
-    assert.match(telegramBodies, /TDF Debug/);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ event: string; status: string }>;
-    assert.deepEqual(logs.slice(-2).map((log) => `${log.event}:${log.status}`), ["logs:success", "debug:success"]);
+    assert.match(telegramBodies, /Commands: \/offers, \/status, \/cookie/);
+    assert.doesNotMatch(telegramBodies, /Recent TDF Logs|TDF Debug|\/debug|\/logs/);
+    assert.equal(calls.filter((call) => call.url.includes("api.telegram.org")).length, 3);
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1325,16 +1396,17 @@ test("debug endpoint recovers corrupted KV metadata", async () => {
   const body = (await result.json()) as {
     cookie: { source: string | null; cookieBytes: number; hasSessionCookie: boolean };
     auth: { lastFailureKind: string | null };
-    health: { lastStaleNotifiedAt: string | null };
+    health: { lastStaleNotifiedAt: string | null; lastDeltaSuccessAt: string | null };
   };
   assert.equal(body.cookie.source, null);
   assert.equal(body.cookie.cookieBytes, 0);
   assert.equal(body.cookie.hasSessionCookie, false);
   assert.equal(body.auth.lastFailureKind, null);
   assert.equal(body.health.lastStaleNotifiedAt, null);
+  assert.equal(body.health.lastDeltaSuccessAt, null);
 });
 
-test("cron delta recovers a corrupted lock instead of crashing before logging", async () => {
+test("cron delta recovers a corrupted lock without writing success logs to KV", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put("DELTA_LOCK", "{not-json");
@@ -1372,15 +1444,16 @@ test("cron delta recovers a corrupted lock instead of crashing before logging", 
   };
 
   try {
-    await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    const events = await captureRuntimeEvents(async () => {
+      await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    });
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
     assert.equal(kv.values.get("DELTA_LOCK"), undefined);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      status: string;
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    assert.equal(logs.at(-1)?.status, "success");
-    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "acquire-delta-lock:success"));
+    const run = lastRunEvent(events)["run"] as { status?: string };
+    assert.equal(run.status, "success");
+    const stepSummaries = lastRunEvent(events)["stepSummaries"] as Array<{ name: string; status: string }>;
+    assert.ok(stepSummaries.some((step) => `${step.name}:${step.status}` === "acquire-delta-lock:success"));
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1441,21 +1514,22 @@ test("cron delta skips when a recent lock is present", async () => {
   };
 
   try {
-    await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      status: string;
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    assert.equal(logs.at(-1)?.status, "skipped");
-    assert.deepEqual(logs.at(-1)?.steps.map((step) => `${step.name}:${step.status}`), [
+    const events = await captureRuntimeEvents(async () => {
+      await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    });
+    const run = lastRunEvent(events)["run"] as { status?: string };
+    assert.equal(run.status, "skipped");
+    const stepSummaries = lastRunEvent(events)["stepSummaries"] as Array<{ name: string; status: string }>;
+    assert.deepEqual(stepSummaries.map((step) => `${step.name}:${step.status}`), [
       "acquire-delta-lock:skipped"
     ]);
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test("cron delta persists a run log when lock release fails", async () => {
+test("cron delta records lock release failure in runtime logs without failing the run", async () => {
   class ReleaseFailureKV extends MemoryKV {
     async delete(key: string): Promise<void> {
       if (key === "DELTA_LOCK") {
@@ -1496,20 +1570,20 @@ test("cron delta persists a run log when lock release fails", async () => {
   };
 
   try {
-    await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+    const events = await captureRuntimeEvents(async () => {
+      await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    });
+    const run = lastRunEvent(events)["run"] as { status?: string };
+    assert.equal(run.status, "success");
+    const stepSummaries = lastRunEvent(events)["stepSummaries"] as Array<{
+      name: string;
       status: string;
-      failureKind?: string;
-      message?: string;
-      steps: Array<{ name: string; status: string; details?: Record<string, unknown> }>;
+      details?: Record<string, unknown>;
     }>;
-    const run = logs.at(-1);
-    assert.equal(run?.status, "failure");
-    assert.equal(run?.failureKind, "unexpected");
-    assert.match(String(run?.message), /release delta lock/);
-    const releaseStep = run?.steps.find((step) => step.name === "release-delta-lock");
+    const releaseStep = stepSummaries.find((step) => step.name === "release-delta-lock");
     assert.equal(releaseStep?.status, "failure");
     assert.match(String(releaseStep?.details?.["message"]), /KV delete failed/);
+    assert.equal(kv.values.get("RUN_LOGS"), undefined);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1571,16 +1645,18 @@ test("cron delta logs stale health without sending Telegram noise", async () => 
   };
 
   try {
-    await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    const events = await captureRuntimeEvents(async () => {
+      await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
+    });
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
-    assert.equal(kv.values.get("HEALTH_STATE"), undefined);
-    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
-      status: string;
-      steps: Array<{ name: string; status: string }>;
-    }>;
-    const steps = logs.at(-1)?.steps.map((step) => `${step.name}:${step.status}`) ?? [];
+    const stepSummaries = lastRunEvent(events)["stepSummaries"] as Array<{ name: string; status: string }>;
+    const steps = stepSummaries.map((step) => `${step.name}:${step.status}`);
     assert.ok(steps.includes("stale-health-check:failure"));
-    assert.equal(logs.at(-1)?.status, "success");
+    const run = lastRunEvent(events)["run"] as { status?: string };
+    assert.equal(run.status, "success");
+    assert.match(kv.values.get("HEALTH_STATE") ?? "", /lastDeltaSuccessAt/);
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{ id: string }>;
+    assert.deepEqual(logs.map((log) => log.id), ["old-success"]);
   } finally {
     globalThis.fetch = originalFetch;
   }

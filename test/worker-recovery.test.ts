@@ -1,10 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createRun } from "../worker/logging.js";
-import { maybeTriggerBrowserbaseRefresh, recordBrowserbaseRefreshFailure } from "../worker/recovery.js";
+import {
+  handleCheckFailure,
+  maybeTriggerBrowserbaseRefresh,
+  recordBrowserbaseRefreshFailure,
+  resetBrowserbaseRefreshMemoryForTest
+} from "../worker/recovery.js";
+import { TdfError } from "../worker/utils.js";
 import { env, envWithoutGithubRefresh, MemoryKV, response, withFetch } from "./worker-helpers.js";
 
 test("Browserbase refresh dispatch records the GitHub target and source run id", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
   const run = createRun("delta", "test");
   let requestBody = "";
@@ -31,6 +38,7 @@ test("Browserbase refresh dispatch records the GitHub target and source run id",
 });
 
 test("Browserbase refresh dispatch skips when GitHub config is missing", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const run = createRun("delta", "test");
 
   const result = await maybeTriggerBrowserbaseRefresh(envWithoutGithubRefresh(), run, {
@@ -47,6 +55,7 @@ test("Browserbase refresh dispatch skips when GitHub config is missing", async (
 });
 
 test("Browserbase dispatch failures preserve the GitHub response in step details", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const run = createRun("delta", "test");
 
   await withFetch(async () => response("bad credentials", { status: 401 }), async () => {
@@ -67,7 +76,40 @@ test("Browserbase dispatch failures preserve the GitHub response in step details
   assert.equal(dispatchStep?.details?.["status"], 401);
 });
 
+test("Browserbase refresh dispatch is in-memory throttled when KV auth state cannot be saved", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
+  class PutFailingKV extends MemoryKV {
+    override async put(): Promise<void> {
+      throw new Error("KV put() limit exceeded for the day.");
+    }
+  }
+  const kv = new PutFailingKV();
+  let dispatches = 0;
+
+  await withFetch(async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url.includes("api.github.com")) {
+      dispatches += 1;
+      return response(null, { status: 204, url });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  }, async () => {
+    const firstRun = createRun("delta", "cron:*/10 * * * *");
+    await handleCheckFailure(env(kv), firstRun, new TdfError("login expired", "auth"));
+
+    const secondRun = createRun("delta", "cron:*/10 * * * *");
+    await handleCheckFailure(env(kv), secondRun, new TdfError("login expired", "auth"));
+
+    assert.equal(dispatches, 1);
+    const dispatchStep = secondRun.steps.find((step) => step.name === "browserbase-refresh-dispatch");
+    assert.equal(dispatchStep?.status, "skipped");
+    assert.equal(dispatchStep?.details?.["lastRefreshAttemptStatus"], "started");
+    assert.equal(dispatchStep?.details?.["source"], "memory");
+  });
+});
+
 test("refresh failure callback logs suppressed CI failures without Telegram noise", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
 
   await withFetch(async () => {
@@ -94,6 +136,7 @@ test("refresh failure callback logs suppressed CI failures without Telegram nois
 });
 
 test("refresh failure callback persists Telegram notification failures", async () => {
+  resetBrowserbaseRefreshMemoryForTest();
   const kv = new MemoryKV();
 
   await withFetch(async () => response("telegram down", { status: 500 }), async () => {

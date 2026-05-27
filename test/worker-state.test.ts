@@ -3,11 +3,15 @@ import test from "node:test";
 import { createRun } from "../worker/logging.js";
 import {
   acquireDeltaLock,
+  clearAuthState,
   normalizeCookie,
+  persistRefreshedCookie,
   readCookie,
   readCookieMeta,
   readSeen,
-  saveCookie
+  resetCookieFallbackForTest,
+  saveCookie,
+  writeSeen
 } from "../worker/state.js";
 import { MemoryKV, env } from "./worker-helpers.js";
 
@@ -50,6 +54,56 @@ test("seen state corruption is recovered and logged on the active run", async ()
   assert.equal(run.steps[0]?.name, "read-seen-state");
   assert.equal(run.steps[0]?.status, "failure");
   assert.equal(run.steps[0]?.details?.["recovered"], true);
+});
+
+test("writeSeen skips KV writes when seen state is unchanged", async () => {
+  const kv = new MemoryKV();
+  await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
+  kv.writes.length = 0;
+  const run = createRun("delta", "test");
+
+  await writeSeen(env(kv), new Set(["1:10"]), run);
+
+  assert.deepEqual(kv.writes, []);
+  assert.equal(run.steps[0]?.name, "write-seen-state");
+  assert.equal(run.steps[0]?.status, "skipped");
+});
+
+test("refreshed cookie falls back to Worker memory when KV writes are exhausted", async () => {
+  resetCookieFallbackForTest();
+  class PutFailingKV extends MemoryKV {
+    override async put(): Promise<void> {
+      throw new Error("KV put() limit exceeded for the day.");
+    }
+  }
+  const kv = new PutFailingKV();
+  kv.values.set("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=old");
+  const run = createRun("delta", "test");
+
+  await persistRefreshedCookie(
+    env(kv),
+    "TNEW=old; .TDFCustomOfferings.Session=old",
+    "TNEW=fresh; .TDFCustomOfferings.Session=fresh",
+    run
+  );
+
+  const readRun = createRun("delta", "test");
+  const cookie = await readCookie(env(kv), readRun);
+
+  assert.equal(cookie, "TNEW=fresh; .TDFCustomOfferings.Session=fresh");
+  assert.equal(readRun.steps[0]?.details?.["source"], "emergency-fallback");
+  resetCookieFallbackForTest();
+});
+
+test("clearAuthState skips KV writes when auth state is already clear", async () => {
+  const kv = new MemoryKV();
+  const run = createRun("delta", "test");
+
+  await clearAuthState(env(kv), run);
+
+  assert.deepEqual(kv.writes, []);
+  assert.equal(run.steps[0]?.name, "clear-auth-state");
+  assert.equal(run.steps[0]?.status, "skipped");
 });
 
 test("delta lock corruption recovers into a new lock owner", async () => {

@@ -19,7 +19,7 @@ It is a small app, but it is built like production software: strict TypeScript, 
 
 - Checks TDF every 10 minutes and sends Telegram alerts only for newly seen performances.
 - Sends a daily 9am New York digest of all current offers.
-- Supports `/offers`, `/status`, `/debug`, `/logs`, and `/cookie` through Telegram.
+- Supports `/offers`, `/status`, `/cookie`, `/help`, and `/start` through Telegram.
 - Keeps the authenticated session warm by touching the main TDF offers page before fetching JSON.
 - Persists refreshed `Set-Cookie` values back into Cloudflare KV.
 - Dispatches a GitHub Browserbase refresh only after auth failures.
@@ -31,8 +31,8 @@ It is a small app, but it is built like production software: strict TypeScript, 
 ```mermaid
 flowchart LR
   Cron["Cloudflare Cron<br/>Every 10 min"] --> Worker["Cloudflare Worker"]
-  Telegram["Telegram Commands<br/>/offers /status /debug /logs /cookie"] --> Worker
-  Worker --> KV[("Cloudflare KV<br/>cookie, seen ids, auth state, logs")]
+  Telegram["Telegram Commands<br/>/offers /status /cookie"] --> Worker
+  Worker --> KV[("Cloudflare KV<br/>cookie, seen ids, auth state, failure breadcrumbs")]
   Worker --> TDFPage["TDF Offers Page<br/>session touch + Set-Cookie"]
   TDFPage --> TDFJson["TDF Performances JSON"]
   TDFJson --> Worker
@@ -84,9 +84,8 @@ Telegram is the primary interface.
 |---|---|
 | `/offers` | Current TDF offers summary plus timestamped details file |
 | `/status` | Cookie health, recent recovery state, and worker version |
-| `/debug` | Compact operational snapshot |
-| `/logs` | Recent run summaries |
 | `/cookie` | Private form URL for pasting a fresh TDF cookie |
+| `/help` / `/start` | Command list |
 
 Private HTTP endpoints are guarded by `COOKIE_FORM_TOKEN`.
 
@@ -95,8 +94,8 @@ Private HTTP endpoints are guarded by `COOKIE_FORM_TOKEN`.
 | `/run-delta?token=...` | Run the delta checker now |
 | `/run-daily?token=...` | Send the current digest now |
 | `/verify-cookie?token=...` | Validate the saved cookie without sending Telegram |
-| `/debug?token=...` | Inspect cookie, auth, health, and recent run state |
-| `/logs?token=...` | Inspect structured logs as JSON |
+| `/debug?token=...` | Operator snapshot for cookie, auth, health, and failure state |
+| `/logs?token=...` | Operator JSON for persisted failure breadcrumbs |
 | `/cookie?token=...` | Paste and validate a fresh cookie |
 
 Sanitized examples: [Telegram messages](docs/examples/telegram-offers.md) and [run logs](docs/examples/run-log.md).
@@ -139,7 +138,7 @@ npm run login:local
 - [Operations](docs/operations.md): secrets, manual recovery, smoke checks, and failure triage.
 - [Testing and Quality Gates](TESTING.md): local and CI verification contract.
 - [Telegram examples](docs/examples/telegram-offers.md): redacted message examples.
-- [Run log examples](docs/examples/run-log.md): redacted success and failure logs.
+- [Run log examples](docs/examples/run-log.md): redacted Cloudflare log and failure breadcrumb examples.
 
 ## Security Notes
 

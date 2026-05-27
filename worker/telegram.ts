@@ -1,8 +1,6 @@
 import { addStep, appendLog, createRun, finishRun } from "./logging.js";
 import {
   runCommandOffers,
-  runDebug,
-  runLogs,
   runStatus
 } from "./commands.js";
 import type { Env, TelegramUpdate } from "./types.js";
@@ -48,22 +46,12 @@ export async function handleTelegram(update: TelegramUpdate, env: Env, requestUr
     return;
   }
 
-  if (text === "/debug" || text === "/debug@tdf_alert_watcher_bot") {
-    await runDebug(env);
-    return;
-  }
-
-  if (text === "/logs" || text === "/logs@tdf_alert_watcher_bot") {
-    await runLogs(env);
-    return;
-  }
-
   if (text === "/help" || text === "/start") {
     await runTelegramMessageCommand(
       env,
       "telegram:/help",
       { command: text },
-      "Commands: /offers, /status, /debug, /logs, /cookie"
+      "Commands: /offers, /status, /cookie"
     );
     return;
   }

@@ -1,4 +1,4 @@
-import type { AlertItem, BrowserbaseRefreshResult, DebugSnapshot, RunLog, TdfOffer } from "./types.js";
+import type { AlertItem, BrowserbaseRefreshResult, DebugSnapshot, TdfOffer } from "./types.js";
 import { countPerformances } from "./tdf.js";
 import { escapeHtml, TdfError } from "./utils.js";
 
@@ -42,25 +42,6 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
   return lines.join("\n");
 }
 
-export function formatLogs(logs: RunLog[]): string {
-  if (logs.length === 0) {
-    return "No run logs yet.";
-  }
-  return [
-    "<b>Recent TDF Logs</b>",
-    ...logs.map((log) =>
-      [
-        `${log.finishedAt} ${log.event} ${log.status}`,
-        `trigger=${log.trigger}`,
-        `shows=${log.shows ?? "-"} performances=${log.performances ?? "-"} new=${log.newPerformances ?? "-"}`,
-        log.failureKind ? `failure=${log.failureKind}: ${escapeHtml(log.message ?? "")}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n")
-    )
-  ].join("\n\n");
-}
-
 export function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {
   const lastFailure = snapshot.lastFailure
     ? `${snapshot.lastFailure.finishedAt} (${snapshot.lastFailure.failureKind ?? "unknown"})`
@@ -69,7 +50,7 @@ export function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): strin
     "<b>TDF Status</b>",
     `Cookie works now. ${offers.length} shows, ${countPerformances(offers)} performances available.`,
     `Cookie saved: ${snapshot.cookie.savedAt ?? "unknown"} (${snapshot.cookie.source ?? "unknown source"})`,
-    `Last success: ${snapshot.lastSuccess?.finishedAt ?? "none"}`,
+    `Last success: ${snapshot.health.lastDeltaSuccessAt ?? snapshot.lastSuccess?.finishedAt ?? "none"}`,
     `Last failure: ${escapeHtml(lastFailure)}`,
     `Browserbase refresh attempted: ${snapshot.auth.lastRefreshAttemptedAt ?? "none"}`,
     `Worker: ${escapeHtml(snapshot.version)}`
@@ -114,32 +95,6 @@ export function formatFailureMessage(
     "<b>TDF checker failed</b>",
     "The saved TDF login may still be fine, but the checker hit an unexpected error.",
     escapeHtml(message)
-  ].join("\n");
-}
-
-export function formatDebug(snapshot: DebugSnapshot): string {
-  return [
-    "<b>TDF Debug</b>",
-    `generated=${escapeHtml(snapshot.generatedAt)}`,
-    `version=${escapeHtml(snapshot.version)}`,
-    "",
-    "<b>Cookie</b>",
-    `saved=${snapshot.cookie.savedAt ?? "unknown"}`,
-    `source=${snapshot.cookie.source ?? "unknown"}`,
-    `bytes=${snapshot.cookie.cookieBytes}`,
-    `hasSession=${snapshot.cookie.hasSessionCookie}`,
-    `hasTNEW=${snapshot.cookie.hasTnewCookie}`,
-    "",
-    "<b>Recovery</b>",
-    `lastFailure=${snapshot.auth.lastFailureKind ?? "none"}`,
-    `lastFailureAt=${snapshot.auth.lastFailureNotifiedAt ?? "none"}`,
-    `lastRefreshAttempt=${snapshot.auth.lastRefreshAttemptedAt ?? "none"}`,
-    "",
-    "<b>Recent</b>",
-    snapshot.recentRuns
-      .slice(-5)
-      .map((run) => `${run.finishedAt} ${run.event}/${run.status} shows=${run.shows ?? "-"} perf=${run.performances ?? "-"} new=${run.newPerformances ?? "-"}`)
-      .join("\n") || "No runs yet."
   ].join("\n");
 }
 

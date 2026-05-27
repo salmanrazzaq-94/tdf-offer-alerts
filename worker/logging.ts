@@ -20,11 +20,15 @@ export async function readLogs(env: Env): Promise<RunLog[]> {
 }
 
 export async function appendLog(env: Env, run: RunLog): Promise<void> {
+  emitRunSummary(run);
+  if (!shouldPersistRunLog(run)) {
+    return;
+  }
+
   try {
     const logs = await readLogs(env);
     logs.push(run);
     await env.TDF_ALERTS.put(logsKey, JSON.stringify(logs.slice(-maxLogs), null, 2));
-    emitRunSummary(run);
   } catch (error) {
     console.error(JSON.stringify({
       event: "tdf-run-log-write-failure",
@@ -32,6 +36,10 @@ export async function appendLog(env: Env, run: RunLog): Promise<void> {
       run: summarizeRun(run)
     }));
   }
+}
+
+function shouldPersistRunLog(run: RunLog): boolean {
+  return run.status === "failure";
 }
 
 export function createRun(event: RunLog["event"], trigger: string): RunLog {
@@ -121,6 +129,12 @@ export function logRuntimeEvent(
 
 function emitRunSummary(run: RunLog): void {
   logRuntimeEvent("info", "tdf-run-finished", {
-    run: summarizeRun(run)
+    run: summarizeRun(run),
+    stepSummaries: run.steps.map((step) => ({
+      name: step.name,
+      status: step.status,
+      durationMs: step.durationMs,
+      details: step.status === "failure" ? step.details : undefined
+    }))
   });
 }

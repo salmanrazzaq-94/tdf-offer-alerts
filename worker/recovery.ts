@@ -6,6 +6,15 @@ import { sendMessage } from "./telegram.js";
 import type { AuthState, BrowserbaseRefreshResult, Env, RunLog } from "./types.js";
 import { escapeHtml, errorMessage, isRecord, TdfError } from "./utils.js";
 
+let inMemoryBrowserbaseRefreshAttempt: {
+  attemptedAt: string;
+  status: BrowserbaseRefreshResult["status"];
+} | null = null;
+
+export function resetBrowserbaseRefreshMemoryForTest(): void {
+  inMemoryBrowserbaseRefreshAttempt = null;
+}
+
 export async function handleCheckFailure(env: Env, run: RunLog, error: unknown): Promise<void> {
   const kind = classifyFailure(error);
   const message = errorMessage(error);
@@ -23,7 +32,7 @@ export async function handleCheckFailure(env: Env, run: RunLog, error: unknown):
     (refreshResult.status === "started" || refreshResult.status === "throttled");
   const notifyNow = shouldNotify && !suppressNotification;
 
-  await writeAuthState(env, {
+  const authStateSaved = await writeAuthState(env, {
     lastFailureNotifiedAt: notifyNow ? new Date().toISOString() : state.lastFailureNotifiedAt,
     lastFailureKind: kind,
     lastFailureReason: message,
@@ -36,7 +45,8 @@ export async function handleCheckFailure(env: Env, run: RunLog, error: unknown):
     suppressNotification,
     browserbaseRefreshStatus: refreshResult.status,
     lastFailureKind: state.lastFailureKind,
-    lastFailureNotifiedAt: state.lastFailureNotifiedAt
+    lastFailureNotifiedAt: state.lastFailureNotifiedAt,
+    authStateSaved
   });
 
   if (notifyNow) {
@@ -82,12 +92,15 @@ export async function recordBrowserbaseRefreshFailure(request: Request, env: Env
       !lastNotifiedAt ||
       Date.now() - lastNotifiedAt >= authFailureNotifyIntervalMs);
 
-  await writeAuthState(env, {
+  const authStateSaved = await writeAuthState(env, {
     lastFailureNotifiedAt: shouldNotify ? new Date().toISOString() : state.lastFailureNotifiedAt,
     lastFailureKind: "auth",
     lastFailureReason: reason,
     lastRefreshAttemptedAt: state.lastRefreshAttemptedAt,
     lastRefreshAttemptStatus: state.lastRefreshAttemptStatus
+  });
+  addStep(run, "write-auth-state", authStateSaved ? "success" : "failure", {
+    reason: authStateSaved ? "Refresh failure state saved." : "Refresh failure state could not be saved."
   });
 
   if (sourceRunId) {
@@ -163,24 +176,24 @@ export async function maybeTriggerBrowserbaseRefresh(
     return { status: "not-configured" };
   }
 
-  const lastAttemptedAt = state.lastRefreshAttemptedAt
-    ? new Date(state.lastRefreshAttemptedAt).valueOf()
-    : 0;
-  const throttleMs =
-    state.lastRefreshAttemptStatus === "dispatch-failed"
-      ? browserbaseDispatchFailureRetryMs
-      : browserbaseRefreshAttemptIntervalMs;
-  if (lastAttemptedAt && Date.now() - lastAttemptedAt < throttleMs) {
+  const lastAttempt = latestRefreshAttempt(state);
+  const throttleMs = lastAttempt?.status === "dispatch-failed"
+    ? browserbaseDispatchFailureRetryMs
+    : browserbaseRefreshAttemptIntervalMs;
+  if (lastAttempt && Date.now() - lastAttempt.at < throttleMs) {
     addStep(run, "browserbase-refresh-dispatch", "skipped", {
       reason: "Recent Browserbase refresh attempt is still inside throttle window.",
-      lastRefreshAttemptedAt: state.lastRefreshAttemptedAt,
-      lastRefreshAttemptStatus: state.lastRefreshAttemptStatus,
+      lastRefreshAttemptedAt: lastAttempt.attemptedAt,
+      lastRefreshAttemptStatus: lastAttempt.status,
+      source: lastAttempt.source,
       throttleMs
     });
     return { status: "throttled" };
   }
 
   const started = Date.now();
+  const attemptedAt = new Date().toISOString();
+  rememberBrowserbaseRefreshAttempt(attemptedAt, "started");
   const response = await fetch(
     `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/actions/workflows/refresh-cookie.yml/dispatches`,
     {
@@ -203,7 +216,7 @@ export async function maybeTriggerBrowserbaseRefresh(
 
   if (!response.ok) {
     const body = (await response.text()).slice(0, 300);
-    const attemptedAt = new Date().toISOString();
+    rememberBrowserbaseRefreshAttempt(attemptedAt, "dispatch-failed");
     addStep(run, "browserbase-refresh-dispatch", "failure", {
       durationMs: Date.now() - started,
       status: response.status,
@@ -217,7 +230,7 @@ export async function maybeTriggerBrowserbaseRefresh(
     };
   }
 
-  const attemptedAt = new Date().toISOString();
+  rememberBrowserbaseRefreshAttempt(attemptedAt, "started");
   addStep(run, "browserbase-refresh-dispatch", "success", {
     durationMs: Date.now() - started,
     repository: env.GITHUB_REPOSITORY,
@@ -226,6 +239,48 @@ export async function maybeTriggerBrowserbaseRefresh(
   });
 
   return { status: "started", attemptedAt };
+}
+
+function latestRefreshAttempt(state: AuthState): {
+  at: number;
+  attemptedAt: string;
+  status: BrowserbaseRefreshResult["status"] | null;
+  source: "kv" | "memory";
+} | null {
+  const attempts: Array<{
+    at: number;
+    attemptedAt: string;
+    status: BrowserbaseRefreshResult["status"] | null;
+    source: "kv" | "memory";
+  }> = [];
+
+  if (state.lastRefreshAttemptedAt) {
+    attempts.push({
+      at: new Date(state.lastRefreshAttemptedAt).valueOf(),
+      attemptedAt: state.lastRefreshAttemptedAt,
+      status: state.lastRefreshAttemptStatus,
+      source: "kv"
+    });
+  }
+  if (inMemoryBrowserbaseRefreshAttempt) {
+    attempts.push({
+      at: new Date(inMemoryBrowserbaseRefreshAttempt.attemptedAt).valueOf(),
+      attemptedAt: inMemoryBrowserbaseRefreshAttempt.attemptedAt,
+      status: inMemoryBrowserbaseRefreshAttempt.status,
+      source: "memory"
+    });
+  }
+
+  return attempts
+    .filter((attempt) => Number.isFinite(attempt.at))
+    .sort((a, b) => b.at - a.at)[0] ?? null;
+}
+
+function rememberBrowserbaseRefreshAttempt(
+  attemptedAt: string,
+  status: BrowserbaseRefreshResult["status"]
+): void {
+  inMemoryBrowserbaseRefreshAttempt = { attemptedAt, status };
 }
 
 function isTruthy(value: string | undefined): boolean {

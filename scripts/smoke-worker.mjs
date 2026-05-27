@@ -46,7 +46,7 @@ log("smoke-debug-ok", {
   lastFailureKind: debug.auth.lastFailureKind ?? "none"
 });
 
-const verification = await fetchJson(`/verify-cookie?token=${encodeURIComponent(token)}`);
+const verification = await fetchJson(`/verify-cookie?token=${encodeURIComponent(token)}&persist=false`);
 if (verification.status !== "success") {
   throw new Error(`/verify-cookie failed: ${JSON.stringify(verification)}`);
 }

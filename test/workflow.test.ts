@@ -73,6 +73,7 @@ test("production smoke stays quiet and limited", () => {
   assert.match(smokeWorkerScript, /\/health/);
   assert.match(smokeWorkerScript, /\/debug/);
   assert.match(smokeWorkerScript, /\/verify-cookie/);
+  assert.match(smokeWorkerScript, /persist=false/);
   assert.doesNotMatch(smokeWorkerScript, /\/run-delta/);
   assert.doesNotMatch(smokeWorkerScript, /\/run-daily/);
   assert.doesNotMatch(smokeWorkerScript, /\/telegram/);
@@ -126,7 +127,8 @@ test("e2e script verifies worker endpoints and telegram delivery paths", () => {
   assert.match(workerE2eScript, /\/refresh-failed/);
   assert.match(workerE2eScript, /notify: "false"/);
   assert.match(workerE2eScript, /telegram:\/status/);
-  assert.match(workerE2eScript, /telegram:\/debug/);
-  assert.match(workerE2eScript, /telegram:\/logs/);
+  assert.match(workerE2eScript, /telegram:\/help/);
   assert.match(workerE2eScript, /telegram:\/offers/);
+  assert.doesNotMatch(workerE2eScript, /send-telegram-debug/);
+  assert.doesNotMatch(workerE2eScript, /send-telegram-logs/);
 });

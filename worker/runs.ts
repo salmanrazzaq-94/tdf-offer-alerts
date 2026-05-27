@@ -10,6 +10,7 @@ import {
   persistRefreshedCookie,
   readCookie,
   readSeen,
+  recordDeltaSuccess,
   releaseDeltaLock,
   saveCookie,
   writeSeen
@@ -73,6 +74,7 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
     await writeSeen(env, new Set(items.map((item) => item.id)), run);
 
     await clearAuthState(env, run);
+    await recordDeltaSuccess(env, run);
     finishRun(run, "success", {
       shows: offers.length,
       performances: items.length,
@@ -104,12 +106,27 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
   return run;
 }
 
-export async function runCookieVerification(env: Env, trigger: string): Promise<RunLog> {
+type CookieVerificationOptions = {
+  persist?: boolean;
+};
+
+export async function runCookieVerification(
+  env: Env,
+  trigger: string,
+  options: CookieVerificationOptions = {}
+): Promise<RunLog> {
   const run = createRun("verify", trigger);
+  const shouldPersist = options.persist !== false;
   try {
     const cookie = await readCookie(env, run);
     const result = await fetchTdfOffers(cookie, run);
-    await persistRefreshedCookie(env, cookie, result.cookie, run);
+    if (shouldPersist) {
+      await persistRefreshedCookie(env, cookie, result.cookie, run);
+    } else {
+      addStep(run, "persist-refreshed-cookie", "skipped", {
+        reason: "Read-only verification requested."
+      });
+    }
     finishRun(run, "success", {
       shows: result.offers.length,
       performances: countPerformances(result.offers),

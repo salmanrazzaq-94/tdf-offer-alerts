@@ -49,7 +49,12 @@ export default {
         if (!isAuthorized(url, env.COOKIE_FORM_TOKEN)) {
           return unauthorized(request, url);
         }
-        return json(await runCookieVerification(env, "manual-http"));
+        const readOnly = url.searchParams.get("persist") === "false";
+        return json(await runCookieVerification(
+          env,
+          readOnly ? "smoke-read-only" : "manual-http",
+          readOnly ? { persist: false } : {}
+        ));
       }
 
       if (request.method === "GET" && url.pathname === "/run-delta") {

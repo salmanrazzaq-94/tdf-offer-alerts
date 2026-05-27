@@ -26,18 +26,31 @@ test("logging creates versioned runs, records steps, and redacts sensitive detai
   assert.equal(run.message, "failed at https://worker.test/logs?token=[redacted]");
 });
 
-test("appendLog preserves compatible RUN_LOGS arrays after corrupted state recovery", async () => {
+test("appendLog persists failed runs and recovers corrupted RUN_LOGS state", async () => {
   const kv = new MemoryKV();
   await kv.put("RUN_LOGS", "{not-json");
   const run = createRun("logs", "test");
-  finishRun(run, "success");
+  finishRun(run, "failure", {
+    failureKind: "unexpected",
+    message: "test failure"
+  });
 
   await appendLog(env(kv), run);
 
   const logs = await readLogs(env(kv));
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.event, "logs");
-  assert.equal(logs[0]?.status, "success");
+  assert.equal(logs[0]?.status, "failure");
+});
+
+test("appendLog emits successful runs to runtime logs without writing KV", async () => {
+  const kv = new MemoryKV();
+  const run = createRun("delta", "test");
+  finishRun(run, "success");
+
+  await appendLog(env(kv), run);
+
+  assert.equal(kv.values.get("RUN_LOGS"), undefined);
 });
 
 test("summarizeRun omits step detail payloads but keeps operational counters", () => {
