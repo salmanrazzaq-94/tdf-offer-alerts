@@ -189,6 +189,8 @@ The Browserbase script stops. This is intentional. The system is captcha-resilie
 
 ## Setup
 
+For a complete machine setup and recovery runbook, use [docs/startup-guide.md](docs/startup-guide.md).
+
 Install dependencies:
 
 ```sh
@@ -215,7 +217,7 @@ Pull requests run two required GitHub jobs before merge:
 
 - `pre-check`: `npm run quality`, which includes typecheck, lint, knip,
   coverage-gated tests, and Wrangler dry-run.
-- `e2e`: deploys `tdf-alerts-bot-e2e`, logs into TDF with Browserbase, verifies
+- `e2e`: deploys the isolated E2E Worker, logs into TDF with Browserbase, verifies
   the saved cookie against TDF, and exercises noisy paths only against the E2E
   Worker and test Telegram chat.
 
@@ -232,14 +234,17 @@ The E2E job covers:
 - Telegram `/debug`
 - Telegram `/logs`
 - Telegram `/offers`
-- Browserbase refresh failure callback through `/refresh-failed`
+- Browserbase refresh failure callback through `/refresh-failed` with the fake
+  CI failure alert suppressed
 
 The E2E job uses an isolated Cloudflare Worker and KV namespace:
 
-- production Worker: `tdf-alerts-bot`
-- E2E Worker: `tdf-alerts-bot-e2e`
-- production KV: `565f5f3899a547439f1ce155e9947971`
-- E2E KV: `663fc62f616f4b22a232d75be8607ad5`
+- production Worker and KV from `wrangler.toml`
+- E2E Worker and KV from `wrangler.e2e.toml`
+
+This project intentionally supports one deployment style: Cloudflare Workers
+with KV. Only replace the checked-in Wrangler resource names and namespace ids
+when creating a separate deployment.
 
 Production deploys are handled only by the `Deploy Worker` GitHub Actions
 workflow on `push` to protected `main`. The deploy workflow has no
@@ -264,7 +269,7 @@ GITHUB_REFRESH_TOKEN
 Cloudflare Worker vars:
 
 ```text
-GITHUB_REPOSITORY=salmanrazzaq-94/tdf-offer-alerts
+GITHUB_REPOSITORY=owner/repo
 GITHUB_REFRESH_REF=main
 ```
 
@@ -295,7 +300,7 @@ Local `.env` for manual refresh/testing:
 
 ```text
 COOKIE_FORM_TOKEN=
-WORKER_BASE_URL=https://tdf-alerts-bot.salmanrazzaq94.workers.dev
+WORKER_BASE_URL=https://your-worker.your-subdomain.workers.dev
 BROWSERBASE_API_KEY=
 BROWSERBASE_PROJECT_ID=
 BROWSERBASE_CONTEXT_ID=

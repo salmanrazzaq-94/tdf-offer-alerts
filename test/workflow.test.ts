@@ -13,6 +13,18 @@ const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts: Record<string, string>;
 };
 const deployGuard = readFileSync("scripts/ensure-production-deploy-from-main.mjs", "utf8");
+const workflows = [refreshWorkflow, preCheckWorkflow, deployWorkflow, workerSmokeWorkflow];
+
+test("workflows use Node 24-compatible GitHub actions", () => {
+  for (const workflow of workflows) {
+    assert.doesNotMatch(workflow, /actions\/checkout@v4/);
+    assert.doesNotMatch(workflow, /actions\/setup-node@v4/);
+    assert.doesNotMatch(workflow, /FORCE_JAVASCRIPT_ACTIONS_TO_NODE24/);
+  }
+
+  assert.match(preCheckWorkflow, /actions\/checkout@v6/);
+  assert.match(preCheckWorkflow, /actions\/setup-node@v6/);
+});
 
 test("refresh-cookie workflow remains manually dispatchable", () => {
   assert.match(refreshWorkflow, /^\s*workflow_dispatch:\s*$/m);
@@ -106,6 +118,7 @@ test("e2e script verifies worker endpoints and telegram delivery paths", () => {
   assert.match(workerE2eScript, /\/logs/);
   assert.match(workerE2eScript, /\/telegram/);
   assert.match(workerE2eScript, /\/refresh-failed/);
+  assert.match(workerE2eScript, /notify: "false"/);
   assert.match(workerE2eScript, /telegram:\/status/);
   assert.match(workerE2eScript, /telegram:\/debug/);
   assert.match(workerE2eScript, /telegram:\/logs/);

@@ -335,6 +335,48 @@ test("Browserbase refresh failure callback accepts form payloads", async () => {
   }
 });
 
+test("Browserbase refresh failure callback can suppress Telegram for E2E", async () => {
+  const kv = new MemoryKV();
+  const calls: string[] = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input: string | URL | Request) => {
+    const url = String(input instanceof Request ? input.url : input);
+    calls.push(url);
+    throw new Error(`Unexpected fetch: ${url}`);
+  };
+
+  try {
+    const result = await worker.fetch(
+      new Request("https://worker.test/refresh-failed?token=form-token", {
+        method: "POST",
+        body: JSON.stringify({
+          notify: "false",
+          reason: "CI E2E refresh failure callback.",
+          source_run_id: "ci-e2e-1"
+        }),
+        headers: { "content-type": "application/json" }
+      }),
+      env(kv),
+      {} as ExecutionContext
+    );
+    const body = (await result.json()) as { notificationSent: boolean; status: string };
+    assert.equal(body.status, "failure");
+    assert.equal(body.notificationSent, false);
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
+
+    const logs = JSON.parse(kv.values.get("RUN_LOGS") ?? "[]") as Array<{
+      steps: Array<{ name: string; status: string; details?: { reason?: string } }>;
+    }>;
+    assert.ok(logs.at(-1)?.steps.some((step) => `${step.name}:${step.status}` === "send-browserbase-refresh-failed:skipped"));
+    assert.match(
+      logs.at(-1)?.steps.find((step) => step.name === "send-browserbase-refresh-failed")?.details?.reason ?? "",
+      /suppressed/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("duplicate Browserbase refresh failure callbacks are throttled", async () => {
   const kv = new MemoryKV();
   const calls: string[] = [];
