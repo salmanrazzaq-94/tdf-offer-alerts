@@ -61,5 +61,5 @@ jobs:
         env:
           COOKIE_FORM_TOKEN: ${{ secrets.COOKIE_FORM_TOKEN }}
           WORKER_BASE_URL: ${{ secrets.WORKER_BASE_URL }}
-          REASON: Browserbase refresh workflow failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          REASON: "Browserbase refresh workflow failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           SOURCE_RUN_ID: ${{ github.event.inputs.source_run_id }}
