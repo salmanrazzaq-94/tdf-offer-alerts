@@ -13,4 +13,6 @@ export const browserbaseRefreshAttemptIntervalMs = 6 * 60 * 60 * 1000;
 export const browserbaseDispatchFailureRetryMs = 30 * 60 * 1000;
 export const staleSuccessAlertAfterMs = 30 * 60 * 1000;
 export const deltaLockTtlMs = 8 * 60 * 1000;
+export const cookieRefreshPersistIntervalMs = 60 * 60 * 1000;
+export const healthStateWriteIntervalMs = 20 * 60 * 1000;
 export const runLogSchemaVersion = 1;

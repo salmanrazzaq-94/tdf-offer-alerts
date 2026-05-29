@@ -1429,11 +1429,12 @@ test("cron delta recovers a corrupted lock without writing success logs to KV", 
       await worker.scheduled({ cron: "*/10 * * * *" } as ScheduledController, env(kv));
     });
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
-    assert.equal(kv.values.get("DELTA_LOCK"), undefined);
+    assert.match(kv.values.get("DELTA_LOCK") ?? "", /acquiredAt/);
     const run = lastRunEvent(events)["run"] as { status?: string };
     assert.equal(run.status, "success");
     const stepSummaries = lastRunEvent(events)["stepSummaries"] as Array<{ name: string; status: string }>;
     assert.ok(stepSummaries.some((step) => `${step.name}:${step.status}` === "acquire-delta-lock:success"));
+    assert.ok(stepSummaries.some((step) => `${step.name}:${step.status}` === "release-delta-lock:skipped"));
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -1493,17 +1494,8 @@ test("cron delta skips when a recent lock is present", async () => {
   }
 });
 
-test("cron delta records lock release failure in runtime logs without failing the run", async () => {
-  class ReleaseFailureKV extends MemoryKV {
-    async delete(key: string): Promise<void> {
-      if (key === "DELTA_LOCK") {
-        throw new Error("KV delete failed");
-      }
-      await super.delete(key);
-    }
-  }
-
-  const kv = new ReleaseFailureKV();
+test("cron delta skips lock release deletes and relies on KV TTL", async () => {
+  const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
   const originalFetch = globalThis.fetch;
@@ -1545,8 +1537,8 @@ test("cron delta records lock release failure in runtime logs without failing th
       details?: Record<string, unknown>;
     }>;
     const releaseStep = stepSummaries.find((step) => step.name === "release-delta-lock");
-    assert.equal(releaseStep?.status, "failure");
-    assert.match(String(releaseStep?.details?.["message"]), /KV delete failed/);
+    assert.equal(releaseStep?.status, "skipped");
+    assert.ok(kv.values.has("DELTA_LOCK"));
   } finally {
     globalThis.fetch = originalFetch;
   }

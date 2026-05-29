@@ -17,14 +17,18 @@ export const sampleOffers = [
 export class MemoryKV {
   readonly values = new Map<string, string>();
   readonly writes: string[] = [];
+  readonly writeOptions = new Map<string, unknown>();
 
   async get(key: string): Promise<string | null> {
     return this.values.get(key) ?? null;
   }
 
-  async put(key: string, value: string): Promise<void> {
+  async put(key: string, value: string, options?: unknown): Promise<void> {
     this.writes.push(key);
     this.values.set(key, value);
+    if (options) {
+      this.writeOptions.set(key, options);
+    }
   }
 
   async delete(key: string): Promise<void> {
