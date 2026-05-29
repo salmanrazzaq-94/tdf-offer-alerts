@@ -1,4 +1,14 @@
-import { authStateKey, cookieKey, cookieMetaKey, deltaLockKey, deltaLockTtlMs, healthStateKey, seenKey } from "./constants.js";
+import {
+  authStateKey,
+  cookieKey,
+  cookieMetaKey,
+  cookieRefreshPersistIntervalMs,
+  deltaLockKey,
+  deltaLockTtlMs,
+  healthStateKey,
+  healthStateWriteIntervalMs,
+  seenKey
+} from "./constants.js";
 import { addStep } from "./logging.js";
 import type { AuthState, CookieMeta, CookieSaveMetadata, Env, HealthState, RunLog } from "./types.js";
 import { errorMessage, TdfError } from "./utils.js";
@@ -44,7 +54,8 @@ export async function persistRefreshedCookie(
   env: Env,
   originalCookie: string,
   refreshedCookie: string,
-  run: RunLog
+  run: RunLog,
+  now = new Date()
 ): Promise<boolean> {
   if (originalCookie === refreshedCookie) {
     addStep(run, "persist-refreshed-cookie", "skipped", {
@@ -54,12 +65,31 @@ export async function persistRefreshedCookie(
   }
 
   const started = Date.now();
+  const meta = await readCookieMeta(env);
+  const importantCookieChanged = didImportantCookieChange(originalCookie, refreshedCookie);
+  const lastPersistedAt = meta.savedAt ? new Date(meta.savedAt).valueOf() : 0;
+  const shouldPersistIncidentalChange =
+    !lastPersistedAt || now.valueOf() - lastPersistedAt >= cookieRefreshPersistIntervalMs;
+
+  if (!importantCookieChanged && !shouldPersistIncidentalChange) {
+    addStep(run, "persist-refreshed-cookie", "skipped", {
+      durationMs: Date.now() - started,
+      reason: "Only incidental cookie values changed recently.",
+      lastPersistedAt: meta.savedAt,
+      nextPersistAfterMs: cookieRefreshPersistIntervalMs - (now.valueOf() - lastPersistedAt),
+      oldCookieBytes: originalCookie.length,
+      newCookieBytes: refreshedCookie.length
+    });
+    return false;
+  }
+
   try {
     await saveCookie(env, refreshedCookie, "tdf-set-cookie", run, started);
     addStep(run, "persist-refreshed-cookie", "success", {
       durationMs: Date.now() - started,
       oldCookieBytes: originalCookie.length,
-      newCookieBytes: refreshedCookie.length
+      newCookieBytes: refreshedCookie.length,
+      reason: importantCookieChanged ? "important-cookie-changed" : "refresh-cadence"
     });
     return true;
   } catch (error) {
@@ -337,7 +367,8 @@ export async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquire
       JSON.stringify({
         owner: run.id,
         acquiredAt: new Date().toISOString()
-      })
+      }),
+      { expirationTtl: Math.ceil(deltaLockTtlMs / 1000) }
     );
     addStep(run, "acquire-delta-lock", "success", {
       durationMs: Date.now() - started,
@@ -354,18 +385,10 @@ export async function acquireDeltaLock(env: Env, run: RunLog): Promise<{ acquire
   }
 }
 
-export async function releaseDeltaLock(env: Env, run: RunLog): Promise<void> {
-  const started = Date.now();
-  try {
-    await env.TDF_ALERTS.delete(deltaLockKey);
-    addStep(run, "release-delta-lock", "success", { durationMs: Date.now() - started });
-  } catch (error) {
-    addStep(run, "release-delta-lock", "failure", {
-      durationMs: Date.now() - started,
-      message: errorMessage(error),
-      reason: "Lock will expire by TTL if the delete cannot be persisted."
-    });
-  }
+export function releaseDeltaLock(_env: Env, run: RunLog): void {
+  addStep(run, "release-delta-lock", "skipped", {
+    reason: "Delta lock uses KV expiration TTL; skipping delete to reduce write usage."
+  });
 }
 
 export async function readHealthState(env: Env): Promise<HealthState> {
@@ -385,12 +408,22 @@ export async function readHealthState(env: Env): Promise<HealthState> {
   };
 }
 
-export async function recordDeltaSuccess(env: Env, run: RunLog): Promise<boolean> {
+export async function recordDeltaSuccess(env: Env, run: RunLog, now = new Date()): Promise<boolean> {
   const started = Date.now();
   const state = await readHealthState(env);
+  const previousSuccessAt = state.lastDeltaSuccessAt ? new Date(state.lastDeltaSuccessAt).valueOf() : 0;
+  if (previousSuccessAt && now.valueOf() - previousSuccessAt < healthStateWriteIntervalMs) {
+    addStep(run, "write-health-state", "skipped", {
+      durationMs: Date.now() - started,
+      lastDeltaSuccessAt: state.lastDeltaSuccessAt,
+      reason: "Recent delta success is already recorded."
+    });
+    return false;
+  }
+
   const next: HealthState = {
     ...state,
-    lastDeltaSuccessAt: new Date().toISOString()
+    lastDeltaSuccessAt: now.toISOString()
   };
   try {
     await env.TDF_ALERTS.put(healthStateKey, JSON.stringify(next));
@@ -432,6 +465,31 @@ function parseSeen(raw: string): Set<string> {
     throw new TdfError("Seen state in KV is invalid.", "unexpected");
   }
   return new Set(parsed);
+}
+
+function didImportantCookieChange(originalCookie: string, refreshedCookie: string): boolean {
+  const original = parseCookieValues(originalCookie);
+  const refreshed = parseCookieValues(refreshedCookie);
+  return (
+    original.get("TNEW") !== refreshed.get("TNEW") ||
+    original.get(".TDFCustomOfferings.Session") !== refreshed.get(".TDFCustomOfferings.Session")
+  );
+}
+
+function parseCookieValues(cookie: string): Map<string, string> {
+  const values = new Map<string, string>();
+  for (const part of cookie.split(";")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const separator = trimmed.indexOf("=");
+    if (separator < 0) {
+      continue;
+    }
+    values.set(trimmed.slice(0, separator), trimmed.slice(separator + 1));
+  }
+  return values;
 }
 
 function isFallbackNewerThanKv(fallbackSavedAt: string, meta: CookieMeta): boolean {

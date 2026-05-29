@@ -86,7 +86,7 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
   } finally {
     if (lock.acquired && trigger.startsWith("cron:")) {
       try {
-        await releaseDeltaLock(env, run);
+        releaseDeltaLock(env, run);
       } catch (error) {
         addStep(run, "release-delta-lock", "failure", {
           message: errorMessage(error)

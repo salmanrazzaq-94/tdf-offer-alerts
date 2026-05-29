@@ -9,6 +9,8 @@ import {
   readCookie,
   readCookieMeta,
   readSeen,
+  recordDeltaSuccess,
+  releaseDeltaLock,
   resetCookieFallbackForTest,
   saveCookie,
   writeSeen
@@ -95,6 +97,62 @@ test("refreshed cookie falls back to Worker memory when KV writes are exhausted"
   resetCookieFallbackForTest();
 });
 
+test("refreshed cookie skips KV writes for incidental non-session cookie changes", async () => {
+  const kv = new MemoryKV();
+  await kv.put(
+    "TDF_COOKIE_META",
+    JSON.stringify({
+      savedAt: new Date().toISOString(),
+      source: "tdf-set-cookie",
+      cookieBytes: 60,
+      hasSessionCookie: true,
+      hasTnewCookie: true
+    })
+  );
+  kv.writes.length = 0;
+  const run = createRun("delta", "test");
+
+  const persisted = await persistRefreshedCookie(
+    env(kv),
+    "TNEW=stable; .TDFCustomOfferings.Session=session; incap_ses_1=old",
+    "TNEW=stable; .TDFCustomOfferings.Session=session; incap_ses_1=fresh",
+    run
+  );
+
+  assert.equal(persisted, false);
+  assert.deepEqual(kv.writes, []);
+  assert.equal(run.steps[0]?.name, "persist-refreshed-cookie");
+  assert.equal(run.steps[0]?.status, "skipped");
+  assert.equal(run.steps[0]?.details?.["reason"], "Only incidental cookie values changed recently.");
+});
+
+test("refreshed cookie still persists incidental changes after the refresh cadence", async () => {
+  const kv = new MemoryKV();
+  await kv.put(
+    "TDF_COOKIE_META",
+    JSON.stringify({
+      savedAt: "2026-05-28T10:00:00.000Z",
+      source: "tdf-set-cookie",
+      cookieBytes: 60,
+      hasSessionCookie: true,
+      hasTnewCookie: true
+    })
+  );
+  kv.writes.length = 0;
+  const run = createRun("delta", "test");
+
+  const persisted = await persistRefreshedCookie(
+    env(kv),
+    "TNEW=stable; .TDFCustomOfferings.Session=session; incap_ses_1=old",
+    "TNEW=stable; .TDFCustomOfferings.Session=session; incap_ses_1=fresh",
+    run,
+    new Date("2026-05-28T11:01:00.000Z")
+  );
+
+  assert.equal(persisted, true);
+  assert.deepEqual(kv.writes, ["TDF_COOKIE", "TDF_COOKIE_META"]);
+});
+
 test("clearAuthState skips KV writes when auth state is already clear", async () => {
   const kv = new MemoryKV();
   const run = createRun("delta", "test");
@@ -109,14 +167,56 @@ test("clearAuthState skips KV writes when auth state is already clear", async ()
 test("delta lock corruption recovers into a new lock owner", async () => {
   const kv = new MemoryKV();
   await kv.put("DELTA_LOCK", "{not-json");
+  kv.writeOptions.clear();
   const run = createRun("delta", "cron:test");
 
   const lock = await acquireDeltaLock(env(kv), run);
 
   assert.equal(lock.acquired, true);
   assert.equal(lock.owner, run.id);
+  assert.deepEqual(kv.writeOptions.get("DELTA_LOCK"), { expirationTtl: 480 });
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "read-delta-lock:failure"));
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "acquire-delta-lock:success"));
+});
+
+test("delta lock release avoids a KV delete and relies on lock TTL", async () => {
+  const kv = new MemoryKV();
+  await kv.put(
+    "DELTA_LOCK",
+    JSON.stringify({
+      owner: "run-1",
+      acquiredAt: new Date().toISOString()
+    })
+  );
+  kv.writes.length = 0;
+  const run = createRun("delta", "cron:test");
+
+  releaseDeltaLock(env(kv), run);
+
+  assert.deepEqual(kv.writes, []);
+  assert.ok(kv.values.has("DELTA_LOCK"));
+  assert.equal(run.steps[0]?.name, "release-delta-lock");
+  assert.equal(run.steps[0]?.status, "skipped");
+});
+
+test("recordDeltaSuccess skips health writes inside the throttle window", async () => {
+  const kv = new MemoryKV();
+  await kv.put(
+    "HEALTH_STATE",
+    JSON.stringify({
+      lastStaleNotifiedAt: null,
+      lastDeltaSuccessAt: "2026-05-28T10:00:00.000Z"
+    })
+  );
+  kv.writes.length = 0;
+  const run = createRun("delta", "cron:test");
+
+  const written = await recordDeltaSuccess(env(kv), run, new Date("2026-05-28T10:10:00.000Z"));
+
+  assert.equal(written, false);
+  assert.deepEqual(kv.writes, []);
+  assert.equal(run.steps[0]?.name, "write-health-state");
+  assert.equal(run.steps[0]?.status, "skipped");
 });
 
 test("readCookie classifies a missing cookie as an auth failure", async () => {
