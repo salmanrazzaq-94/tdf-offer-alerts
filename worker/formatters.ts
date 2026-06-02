@@ -4,13 +4,33 @@ import { escapeHtml, TdfError } from "./utils.js";
 
 export function formatSummary(offers: TdfOffer[], items: AlertItem[]): string {
   const performances = countPerformances(offers);
+  const newIds = new Set(items.map((item) => item.id));
+  const isSubsetAlert = items.length > 0 && items.length < performances;
+  const listedOffers = isSubsetAlert
+    ? offers
+      .map((offer) => ({
+        offer,
+        newCount: offer.performances.filter((performance) =>
+          newIds.has(`${offer.productionSeasonId}:${performance.performanceId}`)
+        ).length
+      }))
+      .filter(({ newCount }) => newCount > 0)
+    : offers.map((offer) => ({ offer, newCount: offer.performances.length }));
+
   return [
-    "<b>TDF Offers</b>",
+    isSubsetAlert ? "<b>New TDF availability</b>" : "<b>TDF Offers</b>",
     `${offers.length} shows, ${performances} performances available.`,
-    items.length ? `${items.length} matching/new performances in this message.` : "",
+    items.length
+      ? `${items.length} new ${items.length === 1 ? "performance" : "performances"} in this message.`
+      : "",
+    isSubsetAlert ? "Full current list attached." : "",
     "",
-    "<b>Available shows</b>",
-    offers.map((offer) => `- ${escapeHtml(offer.title)} (${offer.performances.length})`).join("\n")
+    isSubsetAlert ? "<b>New shows</b>" : "<b>Available shows</b>",
+    listedOffers
+      .map(({ offer, newCount }) =>
+        `- ${escapeHtml(displayTitle(offer.title))} (${isSubsetAlert ? `${newCount} new` : offer.performances.length})`
+      )
+      .join("\n")
   ]
     .filter(Boolean)
     .join("\n");
@@ -23,14 +43,14 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
     `${offers.length} shows | ${countPerformances(offers)} performances | ${newItems.length} new`,
     "",
     "SHOWS",
-    ...offers.map((offer, index) => `${index + 1}. ${offer.title} (${offer.performances.length})`),
+    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer.title)} (${offer.performances.length})`),
     "",
     "DETAILS"
   ];
 
   for (const offer of offers) {
     lines.push("");
-    lines.push(offer.title);
+    lines.push(displayTitle(offer.title));
     lines.push(offer.facility);
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
@@ -40,6 +60,10 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
   }
 
   return lines.join("\n");
+}
+
+function displayTitle(title: string): string {
+  return title.replace(/^Passport:\s*/i, "");
 }
 
 export function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {

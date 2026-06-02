@@ -71,7 +71,7 @@ export async function runDeltaCheck(env: Env, trigger: string): Promise<RunLog> 
       });
     }
 
-    await writeSeen(env, new Set(items.map((item) => item.id)), run);
+    await writeSeen(env, new Set([...seenResult.seen, ...items.map((item) => item.id)]), run);
 
     await clearAuthState(env, run);
     await recordDeltaSuccess(env, run);
