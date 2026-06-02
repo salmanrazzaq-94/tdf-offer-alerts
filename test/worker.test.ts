@@ -460,7 +460,7 @@ test("duplicate Browserbase refresh failure callbacks are throttled", async () =
   }
 });
 
-test("delta prunes unavailable performances so returned offers alert again", async () => {
+test("delta keeps seen history so temporarily unavailable performances do not alert again", async () => {
   const kv = new MemoryKV();
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10", "2:20"]));
@@ -504,7 +504,7 @@ test("delta prunes unavailable performances so returned offers alert again", asy
       {} as ExecutionContext
     );
     assert.equal(((await first.json()) as { newPerformances: number }).newPerformances, 0);
-    assert.deepEqual(JSON.parse(kv.values.get("SEEN_OFFERS") ?? "[]"), ["1:10"]);
+    assert.deepEqual(JSON.parse(kv.values.get("SEEN_OFFERS") ?? "[]"), ["1:10", "2:20"]);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
 
     offers = returnedOffers;
@@ -513,9 +513,9 @@ test("delta prunes unavailable performances so returned offers alert again", asy
       env(kv),
       {} as ExecutionContext
     );
-    assert.equal(((await second.json()) as { newPerformances: number }).newPerformances, 1);
+    assert.equal(((await second.json()) as { newPerformances: number }).newPerformances, 0);
     assert.deepEqual(JSON.parse(kv.values.get("SEEN_OFFERS") ?? "[]"), ["1:10", "2:20"]);
-    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 2);
+    assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
   } finally {
     globalThis.fetch = originalFetch;
   }
