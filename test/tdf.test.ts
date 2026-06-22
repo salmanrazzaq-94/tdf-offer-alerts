@@ -55,6 +55,60 @@ test("parses and flattens TDF offers", () => {
   assert.deepEqual(alerts[0]?.promotions, ["Passport Ticket Offers"]);
 });
 
+test("parses Salesforce Storefront products grouped by show", () => {
+  const offers = parseTdfOffers({
+    products: [
+      {
+        id: "01t-one",
+        fields: {
+          Name: "Small - $20 Seats",
+          Venue__c: "59E59 Theaters",
+          Performance_Date__c: "2026-06-25T18:00:00Z"
+        }
+      },
+      {
+        id: "01t-two",
+        fields: {
+          Name: "Small - $20 Seats",
+          Venue__c: "59E59 Theaters",
+          Performance_Date__c: "2026-06-26T18:00:00Z"
+        }
+      }
+    ]
+  });
+  const alerts = flattenOffers(offers);
+
+  assert.equal(offers.length, 1);
+  assert.equal(offers[0]?.title, "Small - $20 Seats");
+  assert.equal(offers[0]?.performances.length, 2);
+  assert.equal(alerts[0]?.id, "Small - $20 Seats:01t-one");
+});
+
+test("parses readable Salesforce Storefront venue names and skips nameless products", () => {
+  const offers = parseTdfOffers({
+    products: [
+      {
+        id: "01t-one",
+        fields: {
+          Description: '<div><span class="venue_name" id="venue_name" style="font-weight:bold">Lucille Lortel Theatre</span></div>',
+          Name: "Kenrex",
+          Venue__c: "001Pe00001Hpr5P",
+          Performance_Date__c: "2026-06-25T18:00:00Z"
+        }
+      },
+      {
+        error: {
+          message: "Unavailable product"
+        },
+        fields: {}
+      }
+    ]
+  });
+
+  assert.equal(offers.length, 1);
+  assert.equal(offers[0]?.facility, "Lucille Lortel Theatre");
+});
+
 test("diffs first run, second run, and a later new performance", () => {
   const alerts = flattenOffers(parseTdfOffers(sampleResponse));
   const emptyState = { seen: [] };

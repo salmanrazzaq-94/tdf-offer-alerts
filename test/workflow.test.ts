@@ -10,6 +10,8 @@ const e2eWranglerConfig = readFileSync("wrangler.e2e.toml", "utf8");
 const workerE2eScript = readFileSync("scripts/worker-e2e.mjs", "utf8");
 const smokeWorkerScript = readFileSync("scripts/smoke-worker.mjs", "utf8");
 const queryWorkerLogsScript = readFileSync("scripts/query-worker-logs.mjs", "utf8");
+const loginBrowserbaseScript = readFileSync("src/login-browserbase.ts", "utf8");
+const loginLocalScript = readFileSync("src/login-local.ts", "utf8");
 const packageJson = JSON.parse(readFileSync("package.json", "utf8")) as {
   scripts: Record<string, string>;
 };
@@ -48,6 +50,7 @@ test("pre-check workflow validates pull requests without deploying production", 
   assert.match(preCheckWorkflow, /^\s*e2e:\s*$/m);
   assert.match(preCheckWorkflow, /npm run login:browserbase/);
   assert.match(preCheckWorkflow, /npm run worker:e2e/);
+  assert.match(preCheckWorkflow, /TDF_USERNAME: \$\{\{ secrets\.TDF_USERNAME \}\}/);
   assert.match(preCheckWorkflow, /E2E_LOCAL_WORKER: "true"/);
   assert.match(preCheckWorkflow, /TELEGRAM_BOT_TOKEN/);
   assert.match(preCheckWorkflow, /E2E_TELEGRAM_CHAT_ID/);
@@ -70,6 +73,7 @@ test("worker deploy workflow only deploys production from main", () => {
 });
 
 test("production smoke stays quiet and limited", () => {
+  assert.equal(packageJson.scripts["smoke:worker"], "node --env-file=.env scripts/smoke-worker.mjs");
   assert.match(workerSmokeWorkflow, /npm run smoke:worker/);
   assert.match(smokeWorkerScript, /\/health/);
   assert.match(smokeWorkerScript, /\/debug/);
@@ -79,6 +83,20 @@ test("production smoke stays quiet and limited", () => {
   assert.doesNotMatch(smokeWorkerScript, /\/run-daily/);
   assert.doesNotMatch(smokeWorkerScript, /\/telegram/);
   assert.doesNotMatch(smokeWorkerScript, /\/refresh-failed/);
+});
+
+test("login scripts use the current TDF member site", () => {
+  for (const script of [loginBrowserbaseScript, loginLocalScript]) {
+    assert.match(script, /https:\/\/members\.tdf\.org\//);
+    assert.match(script, /getByRole\("link", \{ name: \/Log In\/i \}\)/);
+    assert.doesNotMatch(script, /https:\/\/my\.tdf\.org/);
+    assert.doesNotMatch(script, /https:\/\/nycgw47\.tdf\.org/);
+  }
+  assert.match(loginBrowserbaseScript, /env\["TDF_USERNAME"\] \|\| env\["TDF_EMAIL"\]/);
+  assert.match(loginBrowserbaseScript, /Missing required environment variable: TDF_USERNAME or TDF_EMAIL/);
+  assert.match(refreshWorkflow, /TDF_USERNAME: \$\{\{ secrets\.TDF_USERNAME \}\}/);
+  assert.match(refreshWorkflow, /TDF_EMAIL: \$\{\{ secrets\.TDF_EMAIL \}\}/);
+  assert.match(preCheckWorkflow, /TDF_EMAIL: \$\{\{ secrets\.TDF_EMAIL \}\}/);
 });
 
 test("worker log query script uses Cloudflare telemetry without leaking secrets", () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import worker from "../worker/index.js";
 import { resetBrowserbaseRefreshMemoryForTest } from "../worker/recovery.js";
+import { storefrontProductsFromSample, storefrontSearch } from "./worker-helpers.js";
 
 const sampleOffers = [
   {
@@ -31,6 +32,45 @@ const returnedOffers = [
     ]
   }
 ];
+
+function successfulTdfResponse(url: string, offers = sampleOffers): Response | undefined {
+  if (url.includes("/session-context")) {
+    return response(JSON.stringify({ guestUser: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/category/performances/")) {
+    return response("<html>Performances Logged in as Test LOG OUT</html>", {
+      status: 200,
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+        "set-cookie": "anti=fresh; path=/store"
+      },
+      url
+    });
+  }
+  if (url.includes("/search/products")) {
+    return response(storefrontSearch(offers.flatMap((offer) =>
+      offer.performances.map((performance) => `${offer.productionSeasonId}:${performance.performanceId}`)
+    )), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/products?")) {
+    return response(storefrontProductsFromSample(offers, offers.flatMap((offer) =>
+      offer.performances.map((performance) => `${offer.productionSeasonId}:${performance.performanceId}`)
+    )), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  return undefined;
+}
 
 class MemoryKV {
   readonly values = new Map<string, string>();
@@ -125,14 +165,18 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: {
           "content-type": "text/html; charset=utf-8",
           "set-cookie": "TNEW=member-fresh; path=/"
         },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -177,7 +221,10 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
       [
         "read-cookie:success",
         "refresh-tdf-member-session:success",
+        "tdf-session-context:success",
         "touch-tdf-main-page:success",
+        "fetch-tdf-product-search:success",
+        "fetch-tdf-product-details:success",
         "fetch-tdf-performances:success",
         "persist-refreshed-cookie:success",
         "read-seen-state:success",
@@ -202,11 +249,15 @@ test("auth failure dispatches one automatic Browserbase refresh without Telegram
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url, returnedOffers);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     if (url.includes("api.github.com")) {
@@ -254,11 +305,15 @@ test("auth failure without GitHub refresh config sends a manual recovery alert",
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     if (url.includes("api.telegram.org")) {
@@ -299,6 +354,10 @@ test("Browserbase refresh failure callback sends the Telegram attention message"
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
@@ -344,6 +403,10 @@ test("Browserbase refresh failure callback accepts form payloads", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
@@ -382,6 +445,10 @@ test("Browserbase refresh failure callback can suppress Telegram for E2E", async
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     throw new Error(`Unexpected fetch: ${url}`);
   };
 
@@ -425,6 +492,10 @@ test("duplicate Browserbase refresh failure callbacks are throttled", async () =
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
@@ -470,14 +541,18 @@ test("delta keeps seen history so temporarily unavailable performances do not al
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -539,11 +614,15 @@ test("recent auth failure does not dispatch Browserbase refresh again", async ()
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     throw new Error(`Unexpected fetch: ${url}`);
@@ -577,11 +656,15 @@ test("telegram offers command starts Browserbase recovery without Telegram noise
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     if (url.includes("api.github.com")) {
@@ -631,11 +714,15 @@ test("telegram status command starts Browserbase recovery without Telegram noise
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     if (url.includes("api.github.com")) {
@@ -684,11 +771,15 @@ test("dispatch failure sends a clear recovery attention message", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>login</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/account/login"
+        url: "https://members.tdf.org/store/login"
       });
     }
     if (url.includes("api.github.com")) {
@@ -726,11 +817,15 @@ test("verify-cookie validates the saved cookie without sending Telegram", async 
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -773,11 +868,15 @@ test("verify-cookie succeeds when unrelated KV state is corrupted", async () => 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -818,14 +917,18 @@ test("verify-cookie can run read-only for production smoke without KV writes", a
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: {
           "content-type": "text/html",
           "set-cookie": "TNEW=fresh; Path=/"
         },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -870,14 +973,18 @@ test("delta recovers corrupted seen state without sending a full-current spam al
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -926,17 +1033,21 @@ test("delta does not fail or send a misleading auth alert when details document 
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("sendMessage")) {
       return response('{"ok":true}', { status: 200, url });
     }
     if (url.includes("sendDocument")) {
       return response("telegram document failed", { status: 500, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -986,14 +1097,18 @@ test("delta logs a failed run when the Telegram summary send fails", async () =>
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("sendMessage")) {
       return response("telegram unavailable", { status: 500, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -1084,11 +1199,15 @@ test("cookie form validates and saves a working cookie end to end", async () => 
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -1141,17 +1260,21 @@ test("daily digest sends summary and details document for all current offers", a
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: init?.body });
+    const tdfResponse = successfulTdfResponse(url, returnedOffers);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("sendMessage")) {
       return response('{"ok":true}', { status: 200, url });
     }
     if (url.includes("sendDocument")) {
       return response('{"ok":true}', { status: 200, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -1202,28 +1325,42 @@ test("transient TDF performance failures retry before succeeding", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url === "https://my.tdf.org/") {
-      return response("<html>Events My Account</html>", {
-        status: 200,
-        headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
-      });
-    }
-    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
-      performanceAttempts += 1;
-      if (performanceAttempts === 1) {
-        return response("upstream busy", { status: 500, headers: { "content-type": "text/plain" }, url });
-      }
-      return response(JSON.stringify(sampleOffers), {
+    if (url.includes("/session-context")) {
+      return response(JSON.stringify({ guestUser: false }), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
       });
     }
-    if (url.includes("/TDFCustomOfferings/Current")) {
-      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+    if (url === "https://members.tdf.org/store/") {
+      return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
+        url: "https://members.tdf.org/store/events"
+      });
+    }
+    if (url.includes("/category/performances/")) {
+      return response("<html>Performances Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    if (url.includes("/search/products")) {
+      performanceAttempts += 1;
+      if (performanceAttempts === 1) {
+        return response("upstream busy", { status: 500, headers: { "content-type": "text/plain" }, url });
+      }
+      return response(storefrontSearch(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/products?")) {
+      return response(storefrontProductsFromSample(sampleOffers), {
+        status: 200,
+        headers: { "content-type": "application/json" },
         url
       });
     }
@@ -1258,22 +1395,29 @@ test("transient TDF failures exhaust retries and send a temporary failure alert"
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    if (url === "https://my.tdf.org/") {
+    if (url.includes("/session-context")) {
+      return response(JSON.stringify({ guestUser: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
-    if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
-      return response("still down", { status: 503, headers: { "content-type": "text/plain" }, url });
-    }
-    if (url.includes("/TDFCustomOfferings/Current")) {
-      return response("<html>Current Offers Logged in as Test LOG OUT</html>", {
+    if (url.includes("/category/performances/")) {
+      return response("<html>Performances Logged in as Test LOG OUT</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
         url
       });
+    }
+    if (url.includes("/search/products")) {
+      return response("still down", { status: 503, headers: { "content-type": "text/plain" }, url });
     }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
@@ -1291,7 +1435,7 @@ test("transient TDF failures exhaust retries and send a temporary failure alert"
     assert.equal(body.status, "failure");
     assert.equal(body.failureKind, "transient");
     assert.equal(body.notificationSent, true);
-    assert.equal(calls.filter((call) => call.url.includes("Current?handler=Performances")).length, 3);
+    assert.equal(calls.filter((call) => call.url.includes("/search/products")).length, 3);
     assert.equal(calls.filter((call) => call.url.includes("api.github.com")).length, 0);
     assert.match(calls.find((call) => call.url.includes("api.telegram.org"))?.body ?? "", /temporary failure/);
   } finally {
@@ -1307,6 +1451,10 @@ test("telegram utility commands send cookie link and help only", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
@@ -1397,11 +1545,15 @@ test("cron delta recovers a corrupted lock without writing success logs to KV", 
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -1457,7 +1609,7 @@ test("debug endpoint returns durable cookie, auth, and health diagnostics", asyn
     health: unknown;
     recentRuns?: unknown;
   };
-  assert.match(body.version, /production-hardening/);
+  assert.match(body.version, /salesforce-commerce/);
   assert.equal(body.cookie.hasSessionCookie, true);
   assert.equal(body.cookie.hasTnewCookie, true);
   assert.ok(body.auth);
@@ -1501,11 +1653,15 @@ test("cron delta skips lock release deletes and relies on KV TTL", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {
@@ -1560,14 +1716,18 @@ test("cron delta logs stale health without sending Telegram noise", async () => 
   globalThis.fetch = async (input: string | URL | Request) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
+    const tdfResponse = successfulTdfResponse(url);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
     if (url.includes("api.telegram.org")) {
       return response('{"ok":true}', { status: 200, url });
     }
-    if (url === "https://my.tdf.org/") {
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {

@@ -14,6 +14,39 @@ export const sampleOffers = [
   }
 ];
 
+export function storefrontSearch(productIds = ["01t-test-1"]): string {
+  return JSON.stringify({
+    productsPage: {
+      pageSize: 200,
+      products: productIds.map((id) => ({ id, fields: {} })),
+      total: productIds.length
+    }
+  });
+}
+
+export function storefrontProductsFromSample(
+  offers = sampleOffers,
+  productIds = ["01t-test-1"]
+): string {
+  return JSON.stringify({
+    products: offers.flatMap((offer, offerIndex) =>
+      offer.performances.map((performance, performanceIndex) => {
+        const id = productIds[offerIndex + performanceIndex] ?? `${offer.productionSeasonId}:${performance.performanceId}`;
+        return {
+          id,
+          fields: {
+            Name: offer.title,
+            Venue__c: offer.facility,
+            Performance_Date__c: performance.performanceDate,
+            ProductionSeasonId__c: String(offer.productionSeasonId),
+            PerformanceId__c: String(performance.performanceId)
+          }
+        };
+      })
+    )
+  });
+}
+
 export class MemoryKV {
   readonly values = new Map<string, string>();
   readonly writes: string[] = [];

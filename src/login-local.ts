@@ -1,11 +1,11 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { chromium, type BrowserContext } from "playwright";
+import { chromium, type BrowserContext, type Page } from "playwright";
 import { createOperationLogger, type OperationLogger } from "./observability.js";
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers, TDF_OFFERS_URL } from "./tdf.js";
 
-const TDF_LOGIN_URL = "https://my.tdf.org/account/login";
+const TDF_LOGIN_URL = "https://members.tdf.org/store/login";
 const envPath = ".env";
 const profilePath = process.env["LOCAL_BROWSER_PROFILE"] ?? ".auth/tdf-profile";
 const holdMs = Number(process.env["SESSION_HOLD_SECONDS"] ?? 600) * 1000;
@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     const page = context.pages()[0] ?? (await context.newPage());
     await logger.step("tdf-login-page-open", () =>
       page.goto(TDF_LOGIN_URL, { waitUntil: "domcontentloaded" }), { url: TDF_LOGIN_URL });
+    await logger.step("tdf-login-link-open", () => openLoginForm(page));
 
     logger.info("local-login-waiting-for-user");
 
@@ -38,6 +39,16 @@ async function main(): Promise<void> {
     });
   } finally {
     await logger.step("browser-close", () => context.close());
+  }
+}
+
+async function openLoginForm(page: Page): Promise<void> {
+  const loginLink = page.getByRole("link", { name: /Log In/i }).first();
+  if (await loginLink.isVisible({ timeout: 5_000 }).catch(() => false)) {
+    await Promise.all([
+      page.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => undefined),
+      loginLink.click()
+    ]);
   }
 }
 
@@ -80,8 +91,7 @@ async function waitForTdfCookie(
 
 async function cookieHeader(context: BrowserContext): Promise<string> {
   const cookies = await context.cookies([
-    "https://my.tdf.org",
-    "https://nycgw47.tdf.org",
+    "https://members.tdf.org",
     "https://tdf.org"
   ]);
 
