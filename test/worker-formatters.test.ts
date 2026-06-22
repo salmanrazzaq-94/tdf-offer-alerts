@@ -108,6 +108,25 @@ test("details file keeps performances grouped under each show", () => {
   assert.match(message, /Small - \$20 Seats\n59E59 Theaters\nThu, Jun 25, 2:00 PM\nFri, Jun 26, 2:00 PM/);
 });
 
+test("summary appends Storefront ticket price labels", () => {
+  const offers: TdfOffer[] = [
+    {
+      productionSeasonId: "small",
+      title: "Small",
+      priceLabel: "$20",
+      facility: "59E59 Theaters",
+      performances: [
+        {
+          performanceId: "small-1",
+          performanceDate: "2026-06-25T18:00:00Z"
+        }
+      ]
+    }
+  ];
+
+  assert.match(formatSummary(offers, []), /Small - \$20 Seats \(1\)/);
+});
+
 test("summary stays under Telegram message limits for large offer sets", () => {
   const offers = Array.from({ length: 581 }, (_, index): TdfOffer => ({
     productionSeasonId: `season-${index}`,

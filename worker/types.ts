@@ -25,6 +25,7 @@ type TdfPerformance = {
 export type TdfOffer = {
   productionSeasonId: string | number;
   title: string;
+  priceLabel?: string;
   facility: string;
   thumbnail?: string;
   performances: TdfPerformance[];

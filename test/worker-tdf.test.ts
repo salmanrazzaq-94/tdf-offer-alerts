@@ -305,6 +305,136 @@ test("fetchTdfOffers filters products with no selectable performances", async ()
   });
 });
 
+test("fetchTdfOffers labels offers with ticket variation prices", async () => {
+  const run = createRun("delta", "test");
+
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === tdfMemberHomeUrl) {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: tdfMemberHomeUrl
+      });
+    }
+    if (url.includes("/session-context")) {
+      return response(JSON.stringify({ guestUser: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/category/performances/")) {
+      return response("<html>Performances Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    if (url.includes("/search/products")) {
+      const categoryId = new URL(url).searchParams.get("categoryId");
+      if (categoryId === tdfPerformancesCategoryId) {
+        return response(storefrontSearch(["01t-production-small"]), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          url
+        });
+      }
+      return response(JSON.stringify({
+        productsPage: {
+          products: [
+            {
+              id: "01t-ticket-small",
+              fields: {
+                Name: { value: "Small" },
+                Production__c: { value: "01t-production-small" },
+                Performance_Date__c: { value: "2026-06-24T23:00:00Z" },
+                StockKeepingUnit: { value: "TKT-SMALL-20260624-700PM-Passport-Tier 1" }
+              }
+            }
+          ],
+          total: 1
+        }
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      if (apexMethodFromInit(init) === "getProductionsWithAvailability") {
+        return response(JSON.stringify({ returnValue: ["01t-production-small"] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          url
+        });
+      }
+      return response(JSON.stringify({
+        returnValue: [
+          {
+            Id: "01t-performance-small",
+            Name: "Small",
+            Production__c: "01t-production-small",
+            Performance_Date__c: "2026-06-24T23:00:00.000Z"
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/pricing/products")) {
+      assert.match(url, /01t-ticket-small/);
+      return response(JSON.stringify({
+        currencyIsoCode: "USD",
+        pricingLineItemResults: [
+          {
+            productId: "01t-ticket-small",
+            success: true,
+            unitPrice: "20"
+          }
+        ],
+        success: true
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/products?")) {
+      return response(JSON.stringify({
+        products: [
+          {
+            id: "01t-production-small",
+            fields: {
+              Name: "Small",
+              Venue__c: "Theatre",
+              Performance_Date__c: "2026-06-24T23:00:00Z"
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  }, async () => {
+    const result = await fetchTdfOffers("TNEW=old; .TDFCustomOfferings.Session=session", run);
+    assert.equal(result.offers[0]?.title, "Small");
+    assert.equal(result.offers[0]?.priceLabel, "$20");
+  });
+});
+
 test("fetchTdfOffers classifies login redirects as auth failures", async () => {
   const run = createRun("delta", "test");
 

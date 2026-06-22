@@ -4,14 +4,21 @@ export function formatDigestSummary(offers: TdfOffer[], newItems: AlertItem[]): 
   const productionCount = offers.length;
   const performanceCount = offers.reduce((total, offer) => total + offer.performances.length, 0);
   const summary = offers
-    .map((offer) => `- ${offer.title} (${offer.performances.length})`)
+    .map((offer) => `• ${displayTitle(offer)} (${offer.performances.length})`)
     .join("\n");
 
+  const header = [
+    "TDF Offers",
+    `${productionCount} ${productionCount === 1 ? "show" : "shows"}, ${performanceCount} ${performanceCount === 1 ? "performance" : "performances"} available.`,
+    newItems.length
+      ? `${newItems.length} new ${newItems.length === 1 ? "performance" : "performances"} in this message.`
+      : ""
+  ].filter(Boolean);
+
   return [
-    `<b>TDF Offers Update</b>`,
-    `${newItems.length} new performances. ${productionCount} shows, ${performanceCount} performances available.`,
+    ...header,
     "",
-    `<b>Available shows</b>`,
+    "Available shows",
     escapeHtml(summary)
   ].join("\n");
 }
@@ -22,13 +29,13 @@ export function formatOfferDetailsFile(offers: TdfOffer[], newItems: AlertItem[]
     `${offers.length} shows | ${offers.reduce((total, offer) => total + offer.performances.length, 0)} performances | ${newItems.length} new`,
     "",
     "SHOWS",
-    ...offers.map((offer, index) => `${index + 1}. ${offer.title} (${offer.performances.length})`),
+    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer)} (${offer.performances.length})`),
     "",
     "DETAILS"
   ];
   for (const offer of offers) {
     lines.push("");
-    lines.push(offer.title);
+    lines.push(displayTitle(offer));
     lines.push(offer.facility);
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
@@ -93,4 +100,11 @@ function escapeHtml(value: string): string {
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;");
+}
+
+function displayTitle(offer: TdfOffer): string {
+  if (!offer.priceLabel || /\$\d+(?:\.\d{2})?\s+Seats/i.test(offer.title)) {
+    return offer.title;
+  }
+  return `${offer.title} - ${offer.priceLabel} Seats`;
 }

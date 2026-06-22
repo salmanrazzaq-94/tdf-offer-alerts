@@ -284,6 +284,7 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
         "fetch-tdf-csrf-token:success",
         "fetch-tdf-production-availability:success",
         "fetch-tdf-product-performances:success",
+        "fetch-tdf-ticket-variations:success",
         "fetch-tdf-product-details:success",
         "fetch-tdf-performances:success",
         "persist-refreshed-cookie:success",

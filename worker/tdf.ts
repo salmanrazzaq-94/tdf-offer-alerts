@@ -8,6 +8,7 @@ import {
   tdfProductionAvailabilityClassName,
   tdfProductFields,
   tdfSessionContextUrl,
+  tdfTicketVariationsCategoryId,
   tdfTicketBookingClassName
 } from "./constants.js";
 import { addStep } from "./logging.js";
@@ -28,7 +29,9 @@ export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFe
       const csrfToken = await fetchCsrfToken(activeCookie, run, attempt);
       const availableProductIds = await fetchAvailableProductIds(activeCookie, csrfToken, productIds, run, attempt);
       const selectablePerformances = await fetchSelectablePerformances(activeCookie, csrfToken, availableProductIds, run, attempt);
+      const priceLabels = await fetchTicketPriceLabels(activeCookie, selectablePerformances, run, attempt);
       const offers = await fetchProductDetails(activeCookie, [...selectablePerformances.keys()], selectablePerformances, run, attempt);
+      applyPriceLabels(offers, priceLabels);
       const details = {
         attempt,
         products: productIds.length,
@@ -242,6 +245,9 @@ export function parseOffers(input: unknown): TdfOffer[] {
     };
     if (typeof item["thumbnail"] === "string") {
       offer.thumbnail = item["thumbnail"];
+    }
+    if (typeof item["priceLabel"] === "string") {
+      offer.priceLabel = item["priceLabel"];
     }
     return offer;
   });
@@ -566,6 +572,214 @@ async function fetchProductDetails(
   return mergeStorefrontOffers(offers);
 }
 
+async function fetchTicketPriceLabels(
+  cookie: string,
+  selectablePerformances: Map<string, StorefrontPerformance[]>,
+  run: RunLog,
+  attempt: number
+): Promise<Map<string, string>> {
+  const tickets = await fetchMatchingTicketVariations(cookie, selectablePerformances, run, attempt);
+  if (tickets.length === 0) {
+    return new Map();
+  }
+
+  const prices = await fetchTicketPrices(cookie, tickets.map((ticket) => ticket.productId), run, attempt);
+  const grouped = new Map<string, Set<string>>();
+  for (const ticket of tickets) {
+    const price = prices.get(ticket.productId);
+    if (!price) {
+      continue;
+    }
+    const key = productionKey(ticket.productionId);
+    const values = grouped.get(key) ?? new Set<string>();
+    values.add(price);
+    grouped.set(key, values);
+  }
+
+  return new Map([...grouped].flatMap(([productionId, values]) => {
+    const label = formatPriceLabel([...values]);
+    return label ? [[productionId, label]] : [];
+  }));
+}
+
+type TicketVariation = {
+  productId: string;
+  productionId: string;
+  performanceDate: string;
+};
+
+async function fetchMatchingTicketVariations(
+  cookie: string,
+  selectablePerformances: Map<string, StorefrontPerformance[]>,
+  run: RunLog,
+  attempt: number
+): Promise<TicketVariation[]> {
+  const wanted = new Set<string>();
+  for (const [productionId, performances] of selectablePerformances) {
+    for (const performance of performances) {
+      const performanceDate = normalizedDateKey(fieldString(performance, [
+        "Performance_Date__c",
+        "PerformanceDate__c",
+        "Start_Date__c",
+        "StartDate__c",
+        "Event_Date__c"
+      ]));
+      if (performanceDate) {
+        wanted.add(ticketVariationKey(productionId, performanceDate));
+      }
+    }
+  }
+  if (wanted.size === 0) {
+    return [];
+  }
+
+  const tickets: TicketVariation[] = [];
+  let page = 0;
+  let total = Number.POSITIVE_INFINITY;
+  while (page * 200 < total) {
+    const started = Date.now();
+    const response = await fetch(ticketVariationSearchUrl(page), {
+      headers: jsonHeaders(cookie, tdfOffersUrl)
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = await response.text();
+    const details = {
+      attempt,
+      page,
+      status: response.status,
+      contentType,
+      bodyBytes: body.length,
+      durationMs: Date.now() - started
+    };
+
+    if (!response.ok) {
+      addStep(run, "fetch-tdf-ticket-variations", "failure", details);
+      throw new TdfError(`TDF ticket variations returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+    }
+    if (!contentType.includes("application/json")) {
+      addStep(run, "fetch-tdf-ticket-variations", "failure", {
+        ...details,
+        bodyPreview: body.slice(0, 200)
+      });
+      throw new TdfError(
+        `TDF ticket variations returned non-JSON content (${contentType}): ${body.slice(0, 200)}`,
+        looksLikeAuthFailure(body) ? "auth" : "unexpected"
+      );
+    }
+
+    const parsed = JSON.parse(body) as unknown;
+    const products = productsFromSearchPayload(parsed);
+    for (const product of products) {
+      const fields = isRecord(product["fields"]) ? product["fields"] : {};
+      const productId = stringValue(product["id"]);
+      const productionId = fieldString(fields, ["Production__c", "ProductionSeasonId__c", "Production_Season_Id__c"]);
+      const performanceDate = normalizedDateKey(fieldString(fields, [
+        "Performance_Date__c",
+        "PerformanceDate__c",
+        "Start_Date__c",
+        "StartDate__c",
+        "Event_Date__c"
+      ]));
+      if (!productId || !productionId || !performanceDate) {
+        continue;
+      }
+      if (wanted.has(ticketVariationKey(productionId, performanceDate))) {
+        tickets.push({ productId, productionId, performanceDate });
+      }
+    }
+
+    total = totalFromSearchPayload(parsed) ?? products.length;
+    addStep(run, "fetch-tdf-ticket-variations", "success", {
+      ...details,
+      pageProducts: products.length,
+      ticketsSoFar: tickets.length,
+      total
+    });
+    if (products.length === 0) {
+      break;
+    }
+    page += 1;
+  }
+
+  return tickets;
+}
+
+async function fetchTicketPrices(
+  cookie: string,
+  productIds: string[],
+  run: RunLog,
+  attempt: number
+): Promise<Map<string, string>> {
+  const prices = new Map<string, string>();
+  const chunkSize = 50;
+  for (let index = 0; index < productIds.length; index += chunkSize) {
+    const chunk = productIds.slice(index, index + chunkSize);
+    const started = Date.now();
+    const response = await fetch(ticketPricingUrl(chunk), {
+      headers: jsonHeaders(cookie, tdfOffersUrl)
+    });
+    const contentType = response.headers.get("content-type") ?? "";
+    const body = await response.text();
+    const details = {
+      attempt,
+      chunk: index / chunkSize,
+      requestedProducts: chunk.length,
+      status: response.status,
+      contentType,
+      bodyBytes: body.length,
+      durationMs: Date.now() - started
+    };
+
+    if (!response.ok) {
+      addStep(run, "fetch-tdf-ticket-prices", "failure", details);
+      throw new TdfError(`TDF ticket prices returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+    }
+    if (!contentType.includes("application/json")) {
+      addStep(run, "fetch-tdf-ticket-prices", "failure", {
+        ...details,
+        bodyPreview: body.slice(0, 200)
+      });
+      throw new TdfError(
+        `TDF ticket prices returned non-JSON content (${contentType}): ${body.slice(0, 200)}`,
+        looksLikeAuthFailure(body) ? "auth" : "unexpected"
+      );
+    }
+
+    const parsed = JSON.parse(body) as unknown;
+    if (!isRecord(parsed) || !Array.isArray(parsed["pricingLineItemResults"])) {
+      addStep(run, "fetch-tdf-ticket-prices", "failure", {
+        ...details,
+        bodyPreview: body.slice(0, 200)
+      });
+      throw new TdfError("TDF ticket prices had an invalid response shape.", "unexpected");
+    }
+    for (const item of parsed["pricingLineItemResults"]) {
+      if (!isRecord(item) || item["success"] !== true) {
+        continue;
+      }
+      const productId = stringValue(item["productId"]);
+      const unitPrice = stringValue(item["unitPrice"]);
+      if (productId && unitPrice && Number(unitPrice) > 0) {
+        prices.set(productId, formatCurrency(Number(unitPrice)));
+      }
+    }
+    addStep(run, "fetch-tdf-ticket-prices", "success", {
+      ...details,
+      pricedProducts: prices.size
+    });
+  }
+  return prices;
+}
+
+function applyPriceLabels(offers: TdfOffer[], priceLabels: Map<string, string>): void {
+  for (const offer of offers) {
+    const priceLabel = priceLabels.get(productionKey(String(offer.productionSeasonId)));
+    if (priceLabel) {
+      offer.priceLabel = priceLabel;
+    }
+  }
+}
+
 function expandStorefrontProductsWithPerformances(
   input: unknown,
   selectablePerformances: Map<string, StorefrontPerformance[]>
@@ -632,6 +846,30 @@ function productSearchUrl(page: number): string {
     htmlEncode: "false"
   });
   return `${tdfApiBaseUrl}/search/products?${params.toString()}`;
+}
+
+function ticketVariationSearchUrl(page: number): string {
+  const params = new URLSearchParams({
+    categoryId: tdfTicketVariationsCategoryId,
+    page: String(page),
+    pageSize: "200",
+    fields: "Id,Name,Venue_Name__c,StockKeepingUnit,Performance_Date__c,Production__c",
+    includeProductVariationInfo: "false",
+    language: "en-US",
+    asGuest: "false",
+    htmlEncode: "false"
+  });
+  return `${tdfApiBaseUrl}/search/products?${params.toString()}`;
+}
+
+function ticketPricingUrl(productIds: string[]): string {
+  const params = new URLSearchParams({
+    productIds: productIds.join(","),
+    language: "en-US",
+    asGuest: "false",
+    htmlEncode: "false"
+  });
+  return `${tdfApiBaseUrl}/pricing/products?${params.toString()}`;
 }
 
 function productDetailsUrl(productIds: string[]): string {
@@ -827,7 +1065,50 @@ function fieldString(fields: Record<string, unknown>, candidates: string[]): str
 }
 
 function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+  if (typeof value === "string") {
+    return value.trim() ? value : undefined;
+  }
+  if (isRecord(value) && typeof value["value"] === "string") {
+    return value["value"].trim() ? value["value"] : undefined;
+  }
+  return undefined;
+}
+
+function ticketVariationKey(productionId: string, performanceDate: string): string {
+  return `${productionKey(productionId)}:${performanceDate}`;
+}
+
+function productionKey(productionId: string): string {
+  return /^01t[A-Za-z0-9]{12,15}$/.test(productionId) ? productionId.slice(0, 15) : productionId;
+}
+
+function normalizedDateKey(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const date = new Date(value);
+  return Number.isNaN(date.valueOf()) ? value : date.toISOString();
+}
+
+function formatPriceLabel(prices: string[]): string | undefined {
+  const values = [...new Set(prices)].sort((left, right) => numericPrice(left) - numericPrice(right));
+  if (values.length === 0) {
+    return undefined;
+  }
+  if (values.length === 1) {
+    return values[0];
+  }
+  const first = values[0] ?? "";
+  const last = values[values.length - 1] ?? "";
+  return `${first}-${last}`;
+}
+
+function formatCurrency(value: number): string {
+  return Number.isInteger(value) ? `$${value}` : `$${value.toFixed(2)}`;
+}
+
+function numericPrice(value: string): number {
+  return Number(value.replace(/[^0-9.]/g, ""));
 }
 
 function storefrontImageUrl(value: unknown): string | undefined {

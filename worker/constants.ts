@@ -9,6 +9,7 @@ export const tdfMemberHomeUrl = "https://members.tdf.org/store/";
 export const tdfOffersUrl = "https://members.tdf.org/store/";
 const tdfWebstoreId = "0ZEfK000000qcIvWAI";
 export const tdfPerformancesCategoryId = "0ZGPe0000000AtpOAE";
+export const tdfTicketVariationsCategoryId = "0ZGPe00000003CPOAY";
 export const tdfApiBaseUrl =
   `https://members.tdf.org/store/webruntime/api/services/data/v67.0/commerce/webstores/${tdfWebstoreId}`;
 export const tdfApexExecuteUrl =

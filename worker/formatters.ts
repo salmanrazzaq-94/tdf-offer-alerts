@@ -37,7 +37,7 @@ export function formatSummary(offers: TdfOffer[], items: AlertItem[]): string {
   ].join("\n");
 
   const listLines = listedOffers.map(({ offer, newCount }) =>
-    truncateSummaryLine(`• ${escapeHtml(displayTitle(offer.title))} (${isSubsetAlert ? `${newCount} new` : offer.performances.length})`)
+    truncateSummaryLine(`• ${escapeHtml(displayTitle(offer))} (${isSubsetAlert ? `${newCount} new` : offer.performances.length})`)
   );
 
   return fitSummaryToTelegramLimit(header, listLines);
@@ -50,14 +50,14 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
     `${offers.length} shows | ${countPerformances(offers)} performances | ${newItems.length} new`,
     "",
     "SHOWS",
-    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer.title)} (${offer.performances.length})`),
+    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer)} (${offer.performances.length})`),
     "",
     "DETAILS"
   ];
 
   for (const offer of offers) {
     lines.push("");
-    lines.push(displayTitle(offer.title));
+    lines.push(displayTitle(offer));
     lines.push(offer.facility);
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
@@ -69,8 +69,12 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
   return lines.join("\n");
 }
 
-function displayTitle(title: string): string {
-  return title.replace(/^Passport:\s*/i, "");
+function displayTitle(offer: TdfOffer): string {
+  const title = offer.title.replace(/^Passport:\s*/i, "");
+  if (!offer.priceLabel || /\$\d+(?:\.\d{2})?\s+Seats/i.test(title)) {
+    return title;
+  }
+  return `${title} - ${offer.priceLabel} Seats`;
 }
 
 function fitSummaryToTelegramLimit(header: string, listLines: string[]): string {

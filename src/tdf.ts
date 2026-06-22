@@ -10,6 +10,7 @@ export const TDF_TICKET_BOOKING_CLASS_NAME = "@udd/01pPe000001jpVz";
 export const TDF_SESSION_CONTEXT_URL =
   `${TDF_API_BASE_URL}/session-context?language=en-US&asGuest=false&htmlEncode=false`;
 export const TDF_PERFORMANCES_CATEGORY_ID = "0ZGPe0000000AtpOAE";
+export const TDF_TICKET_VARIATIONS_CATEGORY_ID = "0ZGPe00000003CPOAY";
 export const TDF_PRODUCT_FIELDS = [
   "Name",
   "Description",
@@ -46,6 +47,7 @@ type TdfPerformance = {
 export type TdfOffer = {
   productionSeasonId: string | number;
   title: string;
+  priceLabel?: string;
   facility: string;
   keywords: TdfKeyword[];
   thumbnail: string;
@@ -135,7 +137,7 @@ function parseOffer(input: unknown, index: number): TdfOffer {
     throw new Error(`Offer at index ${index} was not an object.`);
   }
 
-  return {
+  const offer: TdfOffer = {
     productionSeasonId: numberField(input, "productionSeasonId", index),
     title: stringField(input, "title", index),
     facility: stringField(input, "facility", index),
@@ -146,6 +148,10 @@ function parseOffer(input: unknown, index: number): TdfOffer {
     isNew: booleanField(input, "isNew", index),
     promotions: keywordArray(input["promotions"], "promotions", index)
   };
+  if (typeof input["priceLabel"] === "string") {
+    offer.priceLabel = input["priceLabel"];
+  }
+  return offer;
 }
 
 function performanceArray(input: unknown, offerIndex: number): TdfPerformance[] {
@@ -335,7 +341,13 @@ function fieldString(fields: Record<string, unknown>, candidates: string[]): str
 }
 
 function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
+  if (typeof value === "string") {
+    return value.trim() ? value : undefined;
+  }
+  if (isRecord(value) && typeof value["value"] === "string") {
+    return value["value"].trim() ? value["value"] : undefined;
+  }
+  return undefined;
 }
 
 function storefrontImageUrl(value: unknown): string | undefined {
