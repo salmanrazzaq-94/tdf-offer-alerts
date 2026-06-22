@@ -6,7 +6,7 @@ import { createOperationLogger, type OperationLogger } from "./observability.js"
 import { fetchTdfOffersWithCookie } from "./tdf-fetch.js";
 import { flattenOffers, TDF_OFFERS_URL } from "./tdf.js";
 
-const TDF_LOGIN_URL = "https://my.tdf.org/account/login";
+const TDF_LOGIN_URL = "https://members.tdf.org/store/login";
 const envPath = ".env";
 
 type LoginEnv = {
@@ -15,7 +15,7 @@ type LoginEnv = {
   browserbaseContextId: string | undefined;
   cookieFormToken: string | undefined;
   workerBaseUrl: string;
-  tdfEmail: string;
+  tdfUsername: string;
   tdfPassword: string;
 };
 
@@ -105,13 +105,22 @@ async function loginToTdf(page: Page, env: LoginEnv, logger: OperationLogger): P
   await failIfChallenge(page);
 
   const email = page
-    .locator('input[type="email"], input[name*="email" i], input[id*="email" i], input[name*="user" i], input[id*="user" i]')
+    .locator('input[type="email"], input[type="text"], input:not([type]), input[name*="email" i], input[id*="email" i], input[name*="user" i], input[id*="user" i]')
     .first();
   const password = page.locator('input[type="password"]').first();
 
+  if (!(await email.isVisible({ timeout: 5_000 }).catch(() => false))) {
+    const loginLink = page.getByRole("link", { name: /Log In/i }).first();
+    await Promise.all([
+      page.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => undefined),
+      loginLink.click()
+    ]);
+    logger.info("tdf-login-link-clicked", { url: page.url() });
+  }
+
   await email.waitFor({ state: "visible", timeout: 30_000 });
   await password.waitFor({ state: "visible", timeout: 30_000 });
-  await email.fill(env.tdfEmail);
+  await email.fill(env.tdfUsername);
   await password.fill(env.tdfPassword);
   logger.info("tdf-login-form-filled");
 
@@ -127,7 +136,7 @@ async function loginToTdf(page: Page, env: LoginEnv, logger: OperationLogger): P
   logger.info("tdf-login-submit-complete", { url: page.url() });
   await failIfChallenge(page);
 
-  if (page.url().includes("/account/login")) {
+  if (page.url().includes("/account/login") || page.url().includes("/store/login")) {
     const errorText = await visibleText(page);
     throw new Error(`TDF stayed on the login page after submit. ${errorText.slice(0, 300)}`);
   }
@@ -159,8 +168,7 @@ async function saveFailureDebug(page: Page, logger: OperationLogger): Promise<vo
 
 async function cookieHeader(context: BrowserContext): Promise<string> {
   const cookies = await context.cookies([
-    "https://my.tdf.org",
-    "https://nycgw47.tdf.org",
+    "https://members.tdf.org",
     "https://tdf.org"
   ]);
 
@@ -172,13 +180,18 @@ async function closeBrowser(browser: Browser): Promise<void> {
 }
 
 function readLoginEnv(env: NodeJS.ProcessEnv = process.env): LoginEnv {
+  const tdfUsername = env["TDF_USERNAME"] || env["TDF_EMAIL"];
+  if (!tdfUsername) {
+    throw new Error("Missing required environment variable: TDF_USERNAME or TDF_EMAIL");
+  }
+
   return {
     browserbaseApiKey: required(env, "BROWSERBASE_API_KEY"),
     browserbaseProjectId: required(env, "BROWSERBASE_PROJECT_ID"),
     browserbaseContextId: env["BROWSERBASE_CONTEXT_ID"] || undefined,
     cookieFormToken: env["COOKIE_FORM_TOKEN"] || undefined,
     workerBaseUrl: env["WORKER_BASE_URL"] || "https://tdf-alerts-bot.salmanrazzaq94.workers.dev",
-    tdfEmail: required(env, "TDF_EMAIL"),
+    tdfUsername,
     tdfPassword: required(env, "TDF_PASSWORD")
   };
 }

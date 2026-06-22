@@ -1,6 +1,36 @@
-export const TDF_OFFERS_URL = "https://nycgw47.tdf.org/TDFCustomOfferings/Current";
-export const TDF_PERFORMANCES_URL =
-  "https://nycgw47.tdf.org/TDFCustomOfferings/Current?handler=Performances";
+export const TDF_MEMBER_HOME_URL = "https://members.tdf.org/store/";
+export const TDF_OFFERS_URL = "https://members.tdf.org/store/";
+export const TDF_API_BASE_URL =
+  "https://members.tdf.org/store/webruntime/api/services/data/v67.0/commerce/webstores/0ZEfK000000qcIvWAI";
+export const TDF_APEX_EXECUTE_URL =
+  "https://members.tdf.org/store/webruntime/api/apex/execute?language=en-US&asGuest=false&htmlEncode=false";
+export const TDF_CSRF_TOKEN_MODULE_URL = "https://members.tdf.org/store/webruntime/module/@app/csrfToken";
+export const TDF_PRODUCTION_AVAILABILITY_CLASS_NAME = "@udd/01pPe000002Vwl5";
+export const TDF_TICKET_BOOKING_CLASS_NAME = "@udd/01pPe000001jpVz";
+export const TDF_SESSION_CONTEXT_URL =
+  `${TDF_API_BASE_URL}/session-context?language=en-US&asGuest=false&htmlEncode=false`;
+export const TDF_PERFORMANCES_CATEGORY_ID = "0ZGPe0000000AtpOAE";
+export const TDF_TICKET_VARIATIONS_CATEGORY_ID = "0ZGPe00000003CPOAY";
+export const TDF_PRODUCT_FIELDS = [
+  "Name",
+  "Description",
+  "StockKeepingUnit",
+  "Performance_Date__c",
+  "PerformanceDate__c",
+  "Start_Date__c",
+  "StartDate__c",
+  "Event_Date__c",
+  "Venue__c",
+  "Facility__c",
+  "Location__c",
+  "Theater__c",
+  "Theatre__c",
+  "ProductionSeasonId__c",
+  "Production_Season_Id__c",
+  "PerformanceId__c",
+  "Performance_Id__c",
+  "Venue_Name__c"
+].join(",");
 
 type TdfKeyword = {
   categoryId: number;
@@ -10,13 +40,14 @@ type TdfKeyword = {
 };
 
 type TdfPerformance = {
-  performanceId: number;
+  performanceId: string | number;
   performanceDate: string;
 };
 
 export type TdfOffer = {
-  productionSeasonId: number;
+  productionSeasonId: string | number;
   title: string;
+  priceLabel?: string;
   facility: string;
   keywords: TdfKeyword[];
   thumbnail: string;
@@ -32,8 +63,8 @@ export type SeenState = {
 
 export type AlertItem = {
   id: string;
-  productionSeasonId: number;
-  performanceId: number;
+  productionSeasonId: string | number;
+  performanceId: string | number;
   performanceDate: string;
   title: string;
   facility: string;
@@ -43,6 +74,11 @@ export type AlertItem = {
 };
 
 export function parseTdfOffers(input: unknown): TdfOffer[] {
+  const storefrontProducts = productsFromStorefrontPayload(input);
+  if (storefrontProducts) {
+    return offersFromStorefrontProducts(storefrontProducts);
+  }
+
   if (!Array.isArray(input)) {
     throw new Error("TDF response was not a JSON array.");
   }
@@ -92,7 +128,7 @@ export function parseSeenState(input: unknown): SeenState {
   return { seen: [...new Set(input["seen"])].sort() };
 }
 
-function makeAlertId(productionSeasonId: number, performanceId: number): string {
+function makeAlertId(productionSeasonId: string | number, performanceId: string | number): string {
   return `${productionSeasonId}:${performanceId}`;
 }
 
@@ -101,7 +137,7 @@ function parseOffer(input: unknown, index: number): TdfOffer {
     throw new Error(`Offer at index ${index} was not an object.`);
   }
 
-  return {
+  const offer: TdfOffer = {
     productionSeasonId: numberField(input, "productionSeasonId", index),
     title: stringField(input, "title", index),
     facility: stringField(input, "facility", index),
@@ -112,6 +148,10 @@ function parseOffer(input: unknown, index: number): TdfOffer {
     isNew: booleanField(input, "isNew", index),
     promotions: keywordArray(input["promotions"], "promotions", index)
   };
+  if (typeof input["priceLabel"] === "string") {
+    offer.priceLabel = input["priceLabel"];
+  }
+  return offer;
 }
 
 function performanceArray(input: unknown, offerIndex: number): TdfPerformance[] {
@@ -181,4 +221,142 @@ function booleanField(input: Record<string, unknown>, field: string, index: numb
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === "object" && input !== null && !Array.isArray(input);
+}
+
+function productsFromStorefrontPayload(input: unknown): Array<Record<string, unknown>> | undefined {
+  if (!isRecord(input)) {
+    return undefined;
+  }
+  if (Array.isArray(input["products"])) {
+    return input["products"].filter(isRecord);
+  }
+  if (isRecord(input["productsPage"]) && Array.isArray(input["productsPage"]["products"])) {
+    return input["productsPage"]["products"].filter(isRecord);
+  }
+  return undefined;
+}
+
+function offerFromStorefrontProduct(product: Record<string, unknown>, index: number): TdfOffer | undefined {
+  const fields = isRecord(product["fields"]) ? product["fields"] : {};
+  const id = stringValue(product["id"]) ?? `product-${index}`;
+  const title = fieldString(fields, ["Name"]) ?? stringValue(product["name"]);
+  if (!title) {
+    return undefined;
+  }
+  const facility =
+    venueNameFromDescription(fieldString(fields, ["Description"])) ??
+    displayVenueField(fields, ["Venue_Name__c", "Venue__c", "Facility__c", "Location__c", "Theater__c", "Theatre__c"]) ??
+    "TDF";
+  const productionSeasonId = fieldString(fields, ["ProductionSeasonId__c", "Production_Season_Id__c"]) ?? title;
+  const performanceId = fieldString(fields, ["PerformanceId__c", "Performance_Id__c"]) ?? id;
+  const performanceDate =
+    fieldString(fields, ["Performance_Date__c", "PerformanceDate__c", "Start_Date__c", "StartDate__c", "Event_Date__c"]) ??
+    "Date unavailable";
+
+  return {
+    productionSeasonId,
+    title,
+    facility,
+    keywords: [],
+    thumbnail: storefrontImageUrl(product["defaultImage"]) ?? "",
+    performances: [{ performanceId, performanceDate }],
+    isTAP: false,
+    isNew: false,
+    promotions: []
+  };
+}
+
+function offersFromStorefrontProducts(products: Array<Record<string, unknown>>): TdfOffer[] {
+  const grouped = new Map<string, TdfOffer>();
+  products.forEach((product, index) => {
+    const offer = offerFromStorefrontProduct(product, index);
+    if (!offer) {
+      return;
+    }
+    const key = storefrontGroupKey(product, offer);
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.performances.push(...offer.performances);
+      if (!existing.thumbnail && offer.thumbnail) {
+        existing.thumbnail = offer.thumbnail;
+      }
+      return;
+    }
+    grouped.set(key, offer);
+  });
+  return Array.from(grouped.values());
+}
+
+function storefrontGroupKey(product: Record<string, unknown>, offer: TdfOffer): string {
+  const fields = isRecord(product["fields"]) ? product["fields"] : {};
+  const productionSeasonId = fieldString(fields, ["ProductionSeasonId__c", "Production_Season_Id__c"]);
+  if (productionSeasonId) {
+    return `season:${productionSeasonId}`;
+  }
+  return `show:${normalizedKeyPart(offer.title)}:${normalizedKeyPart(offer.facility)}`;
+}
+
+function normalizedKeyPart(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+function venueNameFromDescription(description: string | undefined): string | undefined {
+  if (!description) {
+    return undefined;
+  }
+  const match = description.match(/<span\b[^>]*(?:id|class)=["']venue_name["'][^>]*>(.*?)<\/span>/is);
+  return match?.[1] ? normalizeHtmlText(match[1]) : undefined;
+}
+
+function displayVenueField(fields: Record<string, unknown>, candidates: string[]): string | undefined {
+  const value = fieldString(fields, candidates);
+  if (!value || /^001[A-Za-z0-9]{12,}$/.test(value)) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeHtmlText(value: string): string | undefined {
+  const text = value
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&mdash;/gi, "-")
+    .replace(/&ndash;/gi, "-")
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/gi, "\"")
+    .replace(/\s+/g, " ")
+    .trim();
+  return text || undefined;
+}
+
+function fieldString(fields: Record<string, unknown>, candidates: string[]): string | undefined {
+  for (const candidate of candidates) {
+    const value = stringValue(fields[candidate]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return value.trim() ? value : undefined;
+  }
+  if (isRecord(value) && typeof value["value"] === "string") {
+    return value["value"].trim() ? value["value"] : undefined;
+  }
+  return undefined;
+}
+
+function storefrontImageUrl(value: unknown): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const url = stringValue(value["url"]) ?? stringValue(value["thumbnailUrl"]);
+  if (!url || url.includes("/default-product-image.svg")) {
+    return undefined;
+  }
+  return url.startsWith("/") ? `https://members.tdf.org${url}` : url;
 }

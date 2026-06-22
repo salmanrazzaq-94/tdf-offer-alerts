@@ -2,6 +2,8 @@ import type { AlertItem, BrowserbaseRefreshResult, DebugSnapshot, TdfOffer } fro
 import { countPerformances } from "./tdf.js";
 import { escapeHtml, TdfError } from "./utils.js";
 
+const telegramSummaryLimit = 3900;
+
 export function formatSummary(offers: TdfOffer[], items: AlertItem[]): string {
   const performances = countPerformances(offers);
   const newIds = new Set(items.map((item) => item.id));
@@ -17,23 +19,28 @@ export function formatSummary(offers: TdfOffer[], items: AlertItem[]): string {
       .filter(({ newCount }) => newCount > 0)
     : offers.map((offer) => ({ offer, newCount: offer.performances.length }));
 
-  return [
-    isSubsetAlert ? "<b>New TDF availability</b>" : "<b>TDF Offers</b>",
+  const headerLines = [
+    isSubsetAlert ? "New TDF availability" : "TDF Offers",
     `${offers.length} shows, ${performances} performances available.`,
     items.length
       ? `${items.length} new ${items.length === 1 ? "performance" : "performances"} in this message.`
       : "",
-    isSubsetAlert ? "Full current list attached." : "",
-    "",
-    isSubsetAlert ? "<b>New shows</b>" : "<b>Available shows</b>",
-    listedOffers
-      .map(({ offer, newCount }) =>
-        `- ${escapeHtml(displayTitle(offer.title))} (${isSubsetAlert ? `${newCount} new` : offer.performances.length})`
-      )
-      .join("\n")
+    isSubsetAlert ? "Full current list attached." : ""
   ]
     .filter(Boolean)
-    .join("\n");
+    .join("\n")
+    .split("\n");
+  const header = [
+    ...headerLines,
+    "",
+    isSubsetAlert ? "New shows" : "Available shows"
+  ].join("\n");
+
+  const listLines = listedOffers.map(({ offer, newCount }) =>
+    truncateSummaryLine(`• ${escapeHtml(displayTitle(offer))} (${isSubsetAlert ? `${newCount} new` : offer.performances.length})`)
+  );
+
+  return fitSummaryToTelegramLimit(header, listLines);
 }
 
 export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string {
@@ -43,14 +50,14 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
     `${offers.length} shows | ${countPerformances(offers)} performances | ${newItems.length} new`,
     "",
     "SHOWS",
-    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer.title)} (${offer.performances.length})`),
+    ...offers.map((offer, index) => `${index + 1}. ${displayTitle(offer)} (${offer.performances.length})`),
     "",
     "DETAILS"
   ];
 
   for (const offer of offers) {
     lines.push("");
-    lines.push(displayTitle(offer.title));
+    lines.push(displayTitle(offer));
     lines.push(offer.facility);
     for (const performance of offer.performances) {
       const id = `${offer.productionSeasonId}:${performance.performanceId}`;
@@ -62,8 +69,43 @@ export function formatDetails(offers: TdfOffer[], newItems: AlertItem[]): string
   return lines.join("\n");
 }
 
-function displayTitle(title: string): string {
-  return title.replace(/^Passport:\s*/i, "");
+function displayTitle(offer: TdfOffer): string {
+  const title = offer.title.replace(/^Passport:\s*/i, "");
+  if (!offer.priceLabel || /\$\d+(?:\.\d{2})?\s+Seats/i.test(title)) {
+    return title;
+  }
+  return `${title} - ${offer.priceLabel} Seats`;
+}
+
+function fitSummaryToTelegramLimit(header: string, listLines: string[]): string {
+  const selected: string[] = [];
+  for (let index = 0; index < listLines.length; index += 1) {
+    const line = listLines[index];
+    if (!line) {
+      continue;
+    }
+    const remainingAfterLine = listLines.length - index - 1;
+    const footer = remainingAfterLine > 0
+      ? `...and ${remainingAfterLine} more shows. Full current list attached.`
+      : "";
+    const candidate = [header, ...selected, line, footer].filter(Boolean).join("\n");
+    if (candidate.length > telegramSummaryLimit) {
+      break;
+    }
+    selected.push(line);
+  }
+
+  const remaining = listLines.length - selected.length;
+  const footer = remaining > 0
+    ? `...and ${remaining} more shows. Full current list attached.`
+    : "";
+
+  return [header, ...selected, footer].filter(Boolean).join("\n");
+}
+
+function truncateSummaryLine(value: string): string {
+  const maxLineLength = 220;
+  return value.length > maxLineLength ? `${value.slice(0, maxLineLength - 3)}...` : value;
 }
 
 export function formatStatus(snapshot: DebugSnapshot, offers: TdfOffer[]): string {

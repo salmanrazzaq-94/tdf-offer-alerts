@@ -18,13 +18,14 @@ export type TelegramUpdate = {
 };
 
 type TdfPerformance = {
-  performanceId: number;
+  performanceId: string | number;
   performanceDate: string;
 };
 
 export type TdfOffer = {
-  productionSeasonId: number;
+  productionSeasonId: string | number;
   title: string;
+  priceLabel?: string;
   facility: string;
   thumbnail?: string;
   performances: TdfPerformance[];

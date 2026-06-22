@@ -1,7 +1,73 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleTelegram, sendMessage } from "../worker/telegram.js";
-import { captureRuntimeEvents, lastRunEvent, MemoryKV, env, response, sampleOffers, withFetch } from "./worker-helpers.js";
+import {
+  captureRuntimeEvents,
+  lastRunEvent,
+  MemoryKV,
+  env,
+  response,
+  sampleOffers,
+  storefrontProductsFromSample,
+  storefrontSearch,
+  withFetch
+} from "./worker-helpers.js";
+
+const csrfTokenModule = "LWR.define('@app/csrfToken', [], function() { return \"csrf-token\"; });";
+
+function successfulTdfResponse(url: string, init?: RequestInit): Response | undefined {
+  if (url.includes("/session-context")) {
+    return response(JSON.stringify({ guestUser: false }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/category/performances/")) {
+    return response("<html>Performances Logged in as Test LOG OUT</html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+      url
+    });
+  }
+  if (url.includes("/search/products")) {
+    return response(storefrontSearch(), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/module/@app/csrfToken")) {
+    return response(csrfTokenModule, {
+      status: 200,
+      headers: { "content-type": "application/javascript" },
+      url
+    });
+  }
+  if (url.includes("/api/apex/execute")) {
+    const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+      method?: string;
+      params?: { productionIds?: string[] };
+    };
+    return response(JSON.stringify({
+      returnValue: body.method === "getProductionsWithAvailability"
+        ? (body.params?.productionIds ?? [])
+        : [{ id: "selectable-performance" }]
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/products?")) {
+    return response(storefrontProductsFromSample(sampleOffers), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  return undefined;
+}
 
 test("unauthorized Telegram chats are ignored without writing KV", async () => {
   const kv = new MemoryKV();
@@ -133,13 +199,17 @@ function runTelegramCommand(kv: MemoryKV, text: string): Promise<void> {
 }
 
 function tdfAndTelegramFetch(telegramStatus = 200, telegramBody = "{\"ok\":true}"): typeof fetch {
-  return async (input: string | URL | Request) => {
+  return async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    if (url === "https://my.tdf.org/") {
+    const tdfResponse = successfulTdfResponse(url, init);
+    if (tdfResponse) {
+      return tdfResponse;
+    }
+    if (url === "https://members.tdf.org/store/") {
       return response("<html>Events My Account</html>", {
         status: 200,
         headers: { "content-type": "text/html" },
-        url: "https://my.tdf.org/events"
+        url: "https://members.tdf.org/store/events"
       });
     }
     if (url.includes("/TDFCustomOfferings/Current?handler=Performances")) {

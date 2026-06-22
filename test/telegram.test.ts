@@ -55,9 +55,10 @@ const offer = {
 test("formats a Telegram digest summary", () => {
   const message = formatDigestSummary([offer], [item]);
 
-  assert.match(message, /<b>TDF Offers Update<\/b>/);
-  assert.match(message, /1 new performances\. 1 shows, 1 performances available\./);
-  assert.match(message, /<b>Available shows<\/b>/);
+  assert.match(message, /^TDF Offers/);
+  assert.match(message, /1 show, 1 performance available\./);
+  assert.match(message, /1 new performance in this message\./);
+  assert.match(message, /Available shows/);
   assert.match(message, /Passport: Dog Day Afternoon - \$20 Seats/);
 });
 
@@ -71,6 +72,13 @@ test("formats an attached offer details file", () => {
   assert.doesNotMatch(message, /performanceId/);
   assert.doesNotMatch(message, /={10,}/);
   assert.doesNotMatch(message, /-{10,}/);
+});
+
+test("formats local summaries with Storefront ticket price labels", () => {
+  const message = formatDigestSummary([{ ...offer, title: "Small", priceLabel: "$20" }], []);
+
+  assert.match(message, /Small - \$20 Seats \(1\)/);
+  assert.doesNotMatch(message, /new performance in this message/);
 });
 
 test("formats current details without new markers", () => {
