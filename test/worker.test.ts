@@ -70,7 +70,7 @@ function successfulTdfResponse(url: string, offers = sampleOffers, init?: Reques
     });
   }
   if (url.includes("/api/apex/execute")) {
-    return response(JSON.stringify({ returnValue: selectablePerformancesForApexRequest(offers, init) }), {
+    return response(JSON.stringify({ returnValue: apexReturnValueForRequest(offers, init) }), {
       status: 200,
       headers: { "content-type": "application/json" },
       url
@@ -86,6 +86,23 @@ function successfulTdfResponse(url: string, offers = sampleOffers, init?: Reques
     });
   }
   return undefined;
+}
+
+function productIdsForOffers(offers: typeof sampleOffers): string[] {
+  return offers.flatMap((offer) =>
+    offer.performances.map((performance) => `${offer.productionSeasonId}:${performance.performanceId}`)
+  );
+}
+
+function apexReturnValueForRequest(
+  offers: typeof sampleOffers,
+  init: RequestInit | undefined
+): Array<string | Record<string, unknown>> {
+  const body = JSON.parse(requestBodyText(init)) as { method?: string };
+  if (body.method === "getProductionsWithAvailability") {
+    return productIdsForOffers(offers);
+  }
+  return selectablePerformancesForApexRequest(offers, init);
 }
 
 function selectablePerformancesForApexRequest(
@@ -252,7 +269,7 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
     };
     assert.equal(body.status, "success");
     assert.equal(body.newPerformances, 0);
-    assert.match(kv.values.get("TDF_COOKIE") ?? "", /anti=fresh/);
+    assert.match(kv.values.get("TDF_COOKIE") ?? "", /anti=old/);
     assert.match(kv.values.get("TDF_COOKIE") ?? "", /TNEW=member-fresh/);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
 
@@ -265,6 +282,7 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
         "touch-tdf-main-page:success",
         "fetch-tdf-product-search:success",
         "fetch-tdf-csrf-token:success",
+        "fetch-tdf-production-availability:success",
         "fetch-tdf-product-performances:success",
         "fetch-tdf-product-details:success",
         "fetch-tdf-performances:success",
@@ -1286,7 +1304,7 @@ test("cookie form validates and saves a working cookie end to end", async () => 
 
     assert.equal(result.status, 200);
     assert.match(await result.text(), /Saved\. 1 shows available/);
-    assert.match(kv.values.get("TDF_COOKIE") ?? "", /anti=fresh/);
+    assert.match(kv.values.get("TDF_COOKIE") ?? "", /TNEW=old/);
     assert.doesNotMatch(kv.values.get("TDF_COOKIE") ?? "", /^Cookie:/);
     assert.equal(calls.filter((url) => url.includes("api.telegram.org")).length, 0);
   } finally {
@@ -1407,7 +1425,7 @@ test("transient TDF performance failures retry before succeeding", async () => {
       });
     }
     if (url.includes("/api/apex/execute")) {
-      return response(JSON.stringify({ returnValue: selectablePerformancesForApexRequest(sampleOffers, init) }), {
+      return response(JSON.stringify({ returnValue: apexReturnValueForRequest(sampleOffers, init) }), {
         status: 200,
         headers: { "content-type": "application/json" },
         url

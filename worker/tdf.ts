@@ -5,6 +5,7 @@ import {
   tdfMemberHomeUrl,
   tdfOffersUrl,
   tdfPerformancesCategoryId,
+  tdfProductionAvailabilityClassName,
   tdfProductFields,
   tdfSessionContextUrl,
   tdfTicketBookingClassName
@@ -24,11 +25,14 @@ export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFe
     const started = Date.now();
     try {
       const productIds = await fetchPerformanceProductIds(activeCookie, run, attempt);
-      const selectablePerformances = await fetchSelectablePerformances(activeCookie, productIds, run, attempt);
+      const csrfToken = await fetchCsrfToken(activeCookie, run, attempt);
+      const availableProductIds = await fetchAvailableProductIds(activeCookie, csrfToken, productIds, run, attempt);
+      const selectablePerformances = await fetchSelectablePerformances(activeCookie, csrfToken, availableProductIds, run, attempt);
       const offers = await fetchProductDetails(activeCookie, [...selectablePerformances.keys()], selectablePerformances, run, attempt);
       const details = {
         attempt,
         products: productIds.length,
+        availableProducts: availableProductIds.length,
         selectableProducts: selectablePerformances.size,
         selectablePerformances: countSelectablePerformances(selectablePerformances),
         durationMs: Date.now() - started
@@ -309,6 +313,7 @@ async function fetchPerformanceProductIds(cookie: string, run: RunLog, attempt: 
 
 async function fetchSelectablePerformances(
   cookie: string,
+  csrfToken: string,
   productIds: string[],
   run: RunLog,
   attempt: number
@@ -317,7 +322,6 @@ async function fetchSelectablePerformances(
     return new Map();
   }
 
-  const csrfToken = await fetchCsrfToken(cookie, run, attempt);
   const selectablePerformances = new Map<string, StorefrontPerformance[]>();
   const chunkSize = 10;
   for (let index = 0; index < productIds.length; index += chunkSize) {
@@ -342,6 +346,78 @@ async function fetchSelectablePerformances(
   }
 
   return selectablePerformances;
+}
+
+async function fetchAvailableProductIds(
+  cookie: string,
+  csrfToken: string,
+  productIds: string[],
+  run: RunLog,
+  attempt: number
+): Promise<string[]> {
+  if (productIds.length === 0) {
+    return [];
+  }
+
+  const started = Date.now();
+  const response = await fetch(tdfApexExecuteUrl, {
+    method: "POST",
+    headers: {
+      ...jsonHeaders(cookie, tdfOffersUrl),
+      "Content-Type": "application/json; charset=utf-8",
+      "csrf-token": csrfToken
+    },
+    body: JSON.stringify({
+      namespace: "",
+      classname: tdfProductionAvailabilityClassName,
+      method: "getProductionsWithAvailability",
+      isContinuation: false,
+      params: { productionIds: productIds },
+      cacheable: false
+    })
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  const details = {
+    attempt,
+    requestedProducts: productIds.length,
+    status: response.status,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started
+  };
+
+  if (!response.ok) {
+    addStep(run, "fetch-tdf-production-availability", "failure", details);
+    throw new TdfError(`TDF production availability returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+  }
+  if (!contentType.includes("application/json")) {
+    addStep(run, "fetch-tdf-production-availability", "failure", {
+      ...details,
+      bodyPreview: body.slice(0, 200)
+    });
+    throw new TdfError(
+      `TDF production availability returned non-JSON content (${contentType}): ${body.slice(0, 200)}`,
+      looksLikeAuthFailure(body) ? "auth" : "unexpected"
+    );
+  }
+
+  const parsed = JSON.parse(body) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed["returnValue"])) {
+    addStep(run, "fetch-tdf-production-availability", "failure", {
+      ...details,
+      bodyPreview: body.slice(0, 200)
+    });
+    throw new TdfError("TDF production availability had an invalid response shape.", "unexpected");
+  }
+
+  const available = new Set(parsed["returnValue"].filter((value): value is string => typeof value === "string"));
+  const availableProductIds = productIds.filter((productId) => available.has(productId));
+  addStep(run, "fetch-tdf-production-availability", "success", {
+    ...details,
+    availableProducts: availableProductIds.length
+  });
+  return availableProductIds;
 }
 
 async function fetchCsrfToken(cookie: string, run: RunLog, attempt: number): Promise<string> {
@@ -549,9 +625,8 @@ function productSearchUrl(page: number): string {
     categoryId: tdfPerformancesCategoryId,
     page: String(page),
     pageSize: "200",
-    fields: "Name",
-    includeQuantityRule: "false",
-    skipDecoration: "true",
+    fields: "Id,Name,Venue_Name__c,StockKeepingUnit",
+    includeProductVariationInfo: "false",
     language: "en-US",
     asGuest: "false",
     htmlEncode: "false"
@@ -631,7 +706,7 @@ function offerFromStorefrontProduct(product: Record<string, unknown>, index: num
   }
   const facility =
     venueNameFromDescription(fieldString(fields, ["Description"])) ??
-    displayVenueField(fields, ["Venue__c", "Facility__c", "Location__c", "Theater__c", "Theatre__c"]) ??
+    displayVenueField(fields, ["Venue_Name__c", "Venue__c", "Facility__c", "Location__c", "Theater__c", "Theatre__c"]) ??
     "TDF";
   const productionSeasonId = fieldString(fields, ["ProductionSeasonId__c", "Production_Season_Id__c"]) ?? title;
   const performanceId = fieldString(fields, ["PerformanceId__c", "Performance_Id__c"]) ?? id;

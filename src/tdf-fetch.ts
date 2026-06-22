@@ -6,6 +6,7 @@ import {
   TDF_MEMBER_HOME_URL,
   TDF_OFFERS_URL,
   TDF_PERFORMANCES_CATEGORY_ID,
+  TDF_PRODUCTION_AVAILABILITY_CLASS_NAME,
   TDF_PRODUCT_FIELDS,
   TDF_SESSION_CONTEXT_URL,
   TDF_TICKET_BOOKING_CLASS_NAME,
@@ -77,7 +78,9 @@ async function fetchTdfOffersOnce(
   await verifyAuthenticatedOffersPage(cookie, logger, attempt);
 
   const productIds = await fetchPerformanceProductIds(cookie, logger, attempt);
-  const selectablePerformances = await fetchSelectablePerformances(cookie, productIds, logger, attempt);
+  const csrfToken = await fetchCsrfToken(cookie, logger, attempt);
+  const availableProductIds = await fetchAvailableProductIds(cookie, csrfToken, productIds, logger, attempt);
+  const selectablePerformances = await fetchSelectablePerformances(cookie, csrfToken, availableProductIds, logger, attempt);
   return fetchProductDetails(cookie, [...selectablePerformances.keys()], selectablePerformances, logger, attempt);
 }
 
@@ -238,6 +241,7 @@ async function fetchPerformanceProductIds(
 
 async function fetchSelectablePerformances(
   cookie: string,
+  csrfToken: string,
   productIds: string[],
   logger: OperationLogger | undefined,
   attempt: number
@@ -246,7 +250,6 @@ async function fetchSelectablePerformances(
     return new Map();
   }
 
-  const csrfToken = await fetchCsrfToken(cookie, logger, attempt);
   const selectablePerformances = new Map<string, StorefrontPerformance[]>();
   const chunkSize = 10;
   for (let index = 0; index < productIds.length; index += chunkSize) {
@@ -271,6 +274,69 @@ async function fetchSelectablePerformances(
   }
 
   return selectablePerformances;
+}
+
+async function fetchAvailableProductIds(
+  cookie: string,
+  csrfToken: string,
+  productIds: string[],
+  logger: OperationLogger | undefined,
+  attempt: number
+): Promise<string[]> {
+  if (productIds.length === 0) {
+    return [];
+  }
+
+  const started = Date.now();
+  const response = await fetch(TDF_APEX_EXECUTE_URL, {
+    method: "POST",
+    headers: {
+      ...jsonHeaders(cookie, TDF_OFFERS_URL),
+      "Content-Type": "application/json; charset=utf-8",
+      "csrf-token": csrfToken
+    },
+    body: JSON.stringify({
+      namespace: "",
+      classname: TDF_PRODUCTION_AVAILABILITY_CLASS_NAME,
+      method: "getProductionsWithAvailability",
+      isContinuation: false,
+      params: { productionIds: productIds },
+      cacheable: false
+    }),
+    signal: AbortSignal.timeout(60_000)
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  logger?.info("tdf-production-availability-response", {
+    attempt,
+    requestedProducts: productIds.length,
+    status: response.status,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started
+  });
+
+  if (!response.ok) {
+    throw new TdfFetchError(
+      `TDF production availability returned ${response.status}: ${body.slice(0, 300)}`,
+      classifyStatus(response.status),
+      response.status
+    );
+  }
+  if (!contentType.includes("application/json")) {
+    throw new TdfFetchError(
+      `TDF production availability returned non-JSON content (${contentType}): ${body.slice(0, 300)}`,
+      looksLikeAuthFailure(body) ? "auth" : "unexpected"
+    );
+  }
+
+  const parsed = JSON.parse(body) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed["returnValue"])) {
+    throw new TdfFetchError("TDF production availability had an invalid response shape.", "unexpected", response.status);
+  }
+
+  const available = new Set(parsed["returnValue"].filter((value): value is string => typeof value === "string"));
+  return productIds.filter((productId) => available.has(productId));
 }
 
 async function fetchCsrfToken(
@@ -504,9 +570,8 @@ function productSearchUrl(page: number): string {
     categoryId: TDF_PERFORMANCES_CATEGORY_ID,
     page: String(page),
     pageSize: "200",
-    fields: "Name",
-    includeQuantityRule: "false",
-    skipDecoration: "true",
+    fields: "Id,Name,Venue_Name__c,StockKeepingUnit",
+    includeProductVariationInfo: "false",
     language: "en-US",
     asGuest: "false",
     htmlEncode: "false"

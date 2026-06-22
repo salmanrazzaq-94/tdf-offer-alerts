@@ -15,7 +15,7 @@ import {
 
 const csrfTokenModule = "LWR.define('@app/csrfToken', [], function() { return \"csrf-token\"; });";
 
-function successfulTdfResponse(url: string): Response | undefined {
+function successfulTdfResponse(url: string, init?: RequestInit): Response | undefined {
   if (url.includes("/session-context")) {
     return response(JSON.stringify({ guestUser: false }), {
       status: 200,
@@ -45,7 +45,15 @@ function successfulTdfResponse(url: string): Response | undefined {
     });
   }
   if (url.includes("/api/apex/execute")) {
-    return response(JSON.stringify({ returnValue: [{ id: "selectable-performance" }] }), {
+    const body = JSON.parse(typeof init?.body === "string" ? init.body : "{}") as {
+      method?: string;
+      params?: { productionIds?: string[] };
+    };
+    return response(JSON.stringify({
+      returnValue: body.method === "getProductionsWithAvailability"
+        ? (body.params?.productionIds ?? [])
+        : [{ id: "selectable-performance" }]
+    }), {
       status: 200,
       headers: { "content-type": "application/json" },
       url
@@ -191,9 +199,9 @@ function runTelegramCommand(kv: MemoryKV, text: string): Promise<void> {
 }
 
 function tdfAndTelegramFetch(telegramStatus = 200, telegramBody = "{\"ok\":true}"): typeof fetch {
-  return async (input: string | URL | Request) => {
+  return async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, init);
     if (tdfResponse) {
       return tdfResponse;
     }

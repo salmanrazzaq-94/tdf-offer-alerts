@@ -21,14 +21,34 @@ function productIdFromApexInit(init: RequestInit | undefined): string {
   return body.params?.productId ?? "";
 }
 
+function productIdsFromAvailabilityInit(init: RequestInit | undefined): string[] {
+  const body = JSON.parse(requestBodyText(init)) as { params?: { productionIds?: string[] } };
+  return body.params?.productionIds ?? [];
+}
+
+function apexMethodFromInit(init: RequestInit | undefined): string {
+  const body = JSON.parse(requestBodyText(init)) as { method?: string };
+  return body.method ?? "";
+}
+
+function apexResponseForProductIds(init: RequestInit | undefined, productIds: string[]): string {
+  if (apexMethodFromInit(init) === "getProductionsWithAvailability") {
+    assert.deepEqual(productIdsFromAvailabilityInit(init), productIds);
+    return JSON.stringify({ returnValue: productIds });
+  }
+
+  assert.ok(productIds.includes(productIdFromApexInit(init)));
+  return productPerformancesResponse();
+}
+
 function requestBodyText(init: RequestInit | undefined): string {
   return typeof init?.body === "string" ? init.body : "{}";
 }
 
 test("TDF endpoints use the current members host", () => {
   assert.equal(tdfMemberHomeUrl, "https://members.tdf.org/store/");
-  assert.equal(tdfOffersUrl, "https://members.tdf.org/store/category/performances/0ZGPe00000003CPOAY");
-  assert.equal(tdfPerformancesCategoryId, "0ZGPe00000003CPOAY");
+  assert.equal(tdfOffersUrl, "https://members.tdf.org/store/");
+  assert.equal(tdfPerformancesCategoryId, "0ZGPe0000000AtpOAE");
   assert.match(tdfSessionContextUrl, /commerce\/webstores\/0ZEfK000000qcIvWAI\/session-context/);
   assert.match(tdfSessionContextUrl, /asGuest=false/);
   assert.doesNotMatch(tdfSessionContextUrl, /effectiveAccountId=000000000000000/);
@@ -77,8 +97,7 @@ test("fetchTdfOffers refreshes session cookies and returns parsed offers", async
       });
     }
     if (url.includes("/api/apex/execute")) {
-      assert.equal(productIdFromApexInit(init), "01t-test-1");
-      return response(productPerformancesResponse(), {
+      return response(apexResponseForProductIds(init, ["01t-test-1"]), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
@@ -96,10 +115,9 @@ test("fetchTdfOffers refreshes session cookies and returns parsed offers", async
     const result = await fetchTdfOffers("TNEW=old; .TDFCustomOfferings.Session=session", run);
     assert.equal(result.offers.length, 1);
     assert.match(result.cookie, /TNEW=fresh/);
-    assert.match(result.cookie, /anti=fresh/);
   });
 
-  assert.equal(calls.length, 7);
+  assert.equal(calls.length, 8);
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "fetch-tdf-performances:success"));
 });
 
@@ -149,8 +167,7 @@ test("fetchTdfOffers uses authenticated Storefront requests and batches product 
       });
     }
     if (url.includes("/api/apex/execute")) {
-      assert.ok(productIds.includes(productIdFromApexInit(init)));
-      return response(productPerformancesResponse(), {
+      return response(apexResponseForProductIds(init, productIds), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
@@ -228,24 +245,30 @@ test("fetchTdfOffers filters products with no selectable performances", async ()
       });
     }
     if (url.includes("/api/apex/execute")) {
+      if (apexMethodFromInit(init) === "getProductionsWithAvailability") {
+        assert.deepEqual(productIdsFromAvailabilityInit(init), ["01t-empty-picker", "01t-selectable"]);
+        return response(JSON.stringify({ returnValue: ["01t-selectable"] }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+          url
+        });
+      }
       const productId = productIdFromApexInit(init);
       return response(JSON.stringify({
-        returnValue: productId === "01t-selectable"
-          ? [
-            {
-              Id: "performance-one",
-              Name: "Selectable Show",
-              Production__c: "01t-selectable",
-              Performance_Date__c: "2026-06-25T18:00:00Z"
-            },
-            {
-              Id: "performance-two",
-              Name: "Selectable Show",
-              Production__c: "01t-selectable",
-              Performance_Date__c: "2026-06-26T18:00:00Z"
-            }
-          ]
-          : []
+        returnValue: [
+          {
+            Id: productId === "01t-selectable" ? "performance-one" : "hidden-performance",
+            Name: productId === "01t-selectable" ? "Selectable Show" : "Hidden Show",
+            Production__c: productId,
+            Performance_Date__c: "2026-06-25T18:00:00Z"
+          },
+          {
+            Id: productId === "01t-selectable" ? "performance-two" : "hidden-performance-two",
+            Name: productId === "01t-selectable" ? "Selectable Show" : "Hidden Show",
+            Production__c: productId,
+            Performance_Date__c: "2026-06-26T18:00:00Z"
+          }
+        ]
       }), {
         status: 200,
         headers: { "content-type": "application/json" },
@@ -350,15 +373,18 @@ test("fetchTdfOffers classifies non-JSON auth challenges before parsing", async 
 test("fetchTdfOffers retries transient main page failures before fetching performances", async () => {
   const run = createRun("delta", "test");
   const currentPageStatuses = [522, 200];
+  let memberHomeCalls = 0;
   const calls: string[] = [];
 
   await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
     if (url === tdfMemberHomeUrl) {
-      return response("<html>Events My Account</html>", {
-        status: 200,
-        headers: { "content-type": "text/html" },
+      memberHomeCalls += 1;
+      const status = memberHomeCalls === 1 ? 200 : (currentPageStatuses.shift() ?? 200);
+      return response(status === 200 ? "<html>Events My Account</html>" : "error code: 522", {
+        status,
+        headers: { "content-type": status === 200 ? "text/html" : "text/plain" },
         url: tdfMemberHomeUrl
       });
     }
@@ -368,17 +394,6 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
         headers: { "content-type": "application/json" },
         url
       });
-    }
-    if (url.includes("/category/performances/")) {
-      const status = currentPageStatuses.shift() ?? 200;
-      return response(
-        status === 200 ? "<html>Performances Logged in as Test LOG OUT</html>" : "error code: 522",
-        {
-          status,
-          headers: { "content-type": status === 200 ? "text/html" : "text/plain" },
-          url
-        }
-      );
     }
     if (url.includes("/search/products")) {
       return response(storefrontSearch(), {
@@ -395,8 +410,7 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
       });
     }
     if (url.includes("/api/apex/execute")) {
-      assert.equal(productIdFromApexInit(init), "01t-test-1");
-      return response(productPerformancesResponse(), {
+      return response(apexResponseForProductIds(init, ["01t-test-1"]), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
@@ -415,7 +429,7 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
     assert.equal(result.offers.length, 1);
   });
 
-  assert.equal(calls.filter((url) => url.includes("/category/performances/")).length, 2);
+  assert.equal(calls.filter((url) => url === tdfMemberHomeUrl).length, 3);
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "touch-tdf-main-page:failure"));
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "touch-tdf-main-page:success"));
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "fetch-tdf-performances:success"));
@@ -462,8 +476,7 @@ test("fetchTdfOffers logs JSON parse failures with response metadata", async () 
       });
     }
     if (url.includes("/api/apex/execute")) {
-      assert.equal(productIdFromApexInit(init), "01t-test-1");
-      return response(productPerformancesResponse(), {
+      return response(apexResponseForProductIds(init, ["01t-test-1"]), {
         status: 200,
         headers: { "content-type": "application/json" },
         url

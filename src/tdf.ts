@@ -1,14 +1,15 @@
 export const TDF_MEMBER_HOME_URL = "https://members.tdf.org/store/";
-export const TDF_OFFERS_URL = "https://members.tdf.org/store/category/performances/0ZGPe00000003CPOAY";
+export const TDF_OFFERS_URL = "https://members.tdf.org/store/";
 export const TDF_API_BASE_URL =
   "https://members.tdf.org/store/webruntime/api/services/data/v67.0/commerce/webstores/0ZEfK000000qcIvWAI";
 export const TDF_APEX_EXECUTE_URL =
   "https://members.tdf.org/store/webruntime/api/apex/execute?language=en-US&asGuest=false&htmlEncode=false";
 export const TDF_CSRF_TOKEN_MODULE_URL = "https://members.tdf.org/store/webruntime/module/@app/csrfToken";
+export const TDF_PRODUCTION_AVAILABILITY_CLASS_NAME = "@udd/01pPe000002Vwl5";
 export const TDF_TICKET_BOOKING_CLASS_NAME = "@udd/01pPe000001jpVz";
 export const TDF_SESSION_CONTEXT_URL =
   `${TDF_API_BASE_URL}/session-context?language=en-US&asGuest=false&htmlEncode=false`;
-export const TDF_PERFORMANCES_CATEGORY_ID = "0ZGPe00000003CPOAY";
+export const TDF_PERFORMANCES_CATEGORY_ID = "0ZGPe0000000AtpOAE";
 export const TDF_PRODUCT_FIELDS = [
   "Name",
   "Description",
@@ -26,7 +27,8 @@ export const TDF_PRODUCT_FIELDS = [
   "ProductionSeasonId__c",
   "Production_Season_Id__c",
   "PerformanceId__c",
-  "Performance_Id__c"
+  "Performance_Id__c",
+  "Venue_Name__c"
 ].join(",");
 
 type TdfKeyword = {
@@ -237,7 +239,7 @@ function offerFromStorefrontProduct(product: Record<string, unknown>, index: num
   }
   const facility =
     venueNameFromDescription(fieldString(fields, ["Description"])) ??
-    displayVenueField(fields, ["Venue__c", "Facility__c", "Location__c", "Theater__c", "Theatre__c"]) ??
+    displayVenueField(fields, ["Venue_Name__c", "Venue__c", "Facility__c", "Location__c", "Theater__c", "Theatre__c"]) ??
     "TDF";
   const productionSeasonId = fieldString(fields, ["ProductionSeasonId__c", "Production_Season_Id__c"]) ?? title;
   const performanceId = fieldString(fields, ["PerformanceId__c", "Performance_Id__c"]) ?? id;
