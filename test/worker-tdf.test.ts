@@ -10,6 +10,21 @@ import { createRun } from "../worker/logging.js";
 import { fetchTdfOffers, mergeSetCookies, parseOffers } from "../worker/tdf.js";
 import { response, sampleOffers, storefrontProductsFromSample, storefrontSearch, withFetch } from "./worker-helpers.js";
 
+const csrfTokenModule = "LWR.define('@app/csrfToken', [], function() { return \"csrf-token\"; });";
+
+function productPerformancesResponse(selectable = true): string {
+  return JSON.stringify({ returnValue: selectable ? [{ id: "selectable-performance" }] : [] });
+}
+
+function productIdFromApexInit(init: RequestInit | undefined): string {
+  const body = JSON.parse(requestBodyText(init)) as { params?: { productId?: string } };
+  return body.params?.productId ?? "";
+}
+
+function requestBodyText(init: RequestInit | undefined): string {
+  return typeof init?.body === "string" ? init.body : "{}";
+}
+
 test("TDF endpoints use the current members host", () => {
   assert.equal(tdfMemberHomeUrl, "https://members.tdf.org/store/");
   assert.equal(tdfOffersUrl, "https://members.tdf.org/store/category/performances/0ZGPe00000003CPOAY");
@@ -23,7 +38,7 @@ test("fetchTdfOffers refreshes session cookies and returns parsed offers", async
   const run = createRun("delta", "test");
   const calls: string[] = [];
 
-  await withFetch(async (input: string | URL | Request) => {
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
     if (url === tdfMemberHomeUrl) {
@@ -54,6 +69,21 @@ test("fetchTdfOffers refreshes session cookies and returns parsed offers", async
         url
       });
     }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      assert.equal(productIdFromApexInit(init), "01t-test-1");
+      return response(productPerformancesResponse(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
     if (url.includes("/products?")) {
       return response(storefrontProductsFromSample(sampleOffers), {
         status: 200,
@@ -69,7 +99,7 @@ test("fetchTdfOffers refreshes session cookies and returns parsed offers", async
     assert.match(result.cookie, /anti=fresh/);
   });
 
-  assert.equal(calls.length, 5);
+  assert.equal(calls.length, 7);
   assert.ok(run.steps.some((step) => `${step.name}:${step.status}` === "fetch-tdf-performances:success"));
 });
 
@@ -78,7 +108,7 @@ test("fetchTdfOffers uses authenticated Storefront requests and batches product 
   const productIds = Array.from({ length: 21 }, (_, index) => `01t-test-${index + 1}`);
   const productDetailCalls: string[] = [];
 
-  await withFetch(async (input: string | URL | Request) => {
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url === tdfMemberHomeUrl) {
       return response("<html>Events My Account</html>", {
@@ -106,6 +136,21 @@ test("fetchTdfOffers uses authenticated Storefront requests and batches product 
     if (url.includes("/search/products")) {
       assert.match(url, /asGuest=false/);
       return response(storefrontSearch(productIds), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      assert.ok(productIds.includes(productIdFromApexInit(init)));
+      return response(productPerformancesResponse(), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
@@ -139,6 +184,102 @@ test("fetchTdfOffers uses authenticated Storefront requests and batches product 
   });
 
   assert.equal(productDetailCalls.length, 2);
+});
+
+test("fetchTdfOffers filters products with no selectable performances", async () => {
+  const run = createRun("delta", "test");
+  const productDetailIds: string[] = [];
+
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === tdfMemberHomeUrl) {
+      return response("<html>Events My Account</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url: tdfMemberHomeUrl
+      });
+    }
+    if (url.includes("/session-context")) {
+      return response(JSON.stringify({ guestUser: false }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/category/performances/")) {
+      return response("<html>Performances Logged in as Test LOG OUT</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+        url
+      });
+    }
+    if (url.includes("/search/products")) {
+      return response(storefrontSearch(["01t-empty-picker", "01t-selectable"]), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      const productId = productIdFromApexInit(init);
+      return response(JSON.stringify({
+        returnValue: productId === "01t-selectable"
+          ? [
+            {
+              Id: "performance-one",
+              Name: "Selectable Show",
+              Production__c: "01t-selectable",
+              Performance_Date__c: "2026-06-25T18:00:00Z"
+            },
+            {
+              Id: "performance-two",
+              Name: "Selectable Show",
+              Production__c: "01t-selectable",
+              Performance_Date__c: "2026-06-26T18:00:00Z"
+            }
+          ]
+          : []
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/products?")) {
+      productDetailIds.push(...(new URL(url).searchParams.get("ids")?.split(",") ?? []));
+      return response(JSON.stringify({
+        products: [
+          {
+            id: "01t-selectable",
+            fields: {
+              Name: "Selectable Show",
+              Venue__c: "Theatre",
+              Performance_Date__c: "2026-06-25T18:00:00Z"
+            }
+          }
+        ]
+      }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    throw new Error(`Unexpected fetch ${url}`);
+  }, async () => {
+    const result = await fetchTdfOffers("TNEW=old; .TDFCustomOfferings.Session=session", run);
+    assert.equal(result.offers.length, 1);
+    assert.equal(result.offers[0]?.performances.length, 2);
+    assert.equal(result.offers[0]?.performances[0]?.performanceId, "performance-one");
+    assert.equal(result.offers[0]?.performances[1]?.performanceDate, "2026-06-26T18:00:00Z");
+    assert.deepEqual(productDetailIds, ["01t-selectable"]);
+  });
 });
 
 test("fetchTdfOffers classifies login redirects as auth failures", async () => {
@@ -211,7 +352,7 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
   const currentPageStatuses = [522, 200];
   const calls: string[] = [];
 
-  await withFetch(async (input: string | URL | Request) => {
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
     if (url === tdfMemberHomeUrl) {
@@ -246,6 +387,21 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
         url
       });
     }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      assert.equal(productIdFromApexInit(init), "01t-test-1");
+      return response(productPerformancesResponse(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
     if (url.includes("/products?")) {
       return response(storefrontProductsFromSample(sampleOffers), {
         status: 200,
@@ -268,7 +424,7 @@ test("fetchTdfOffers retries transient main page failures before fetching perfor
 test("fetchTdfOffers logs JSON parse failures with response metadata", async () => {
   const run = createRun("delta", "test");
 
-  await withFetch(async (input: string | URL | Request) => {
+  await withFetch(async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url === tdfMemberHomeUrl) {
       return response("<html>Events My Account</html>", {
@@ -293,6 +449,21 @@ test("fetchTdfOffers logs JSON parse failures with response metadata", async () 
     }
     if (url.includes("/search/products")) {
       return response(storefrontSearch(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      assert.equal(productIdFromApexInit(init), "01t-test-1");
+      return response(productPerformancesResponse(), {
         status: 200,
         headers: { "content-type": "application/json" },
         url

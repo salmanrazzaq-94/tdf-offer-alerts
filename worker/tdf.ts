@@ -1,14 +1,19 @@
 import {
+  tdfApexExecuteUrl,
   tdfApiBaseUrl,
+  tdfCsrfTokenModuleUrl,
   tdfMemberHomeUrl,
   tdfOffersUrl,
   tdfPerformancesCategoryId,
   tdfProductFields,
-  tdfSessionContextUrl
+  tdfSessionContextUrl,
+  tdfTicketBookingClassName
 } from "./constants.js";
 import { addStep } from "./logging.js";
 import type { AlertItem, RunLog, TdfFetchResult, TdfOffer } from "./types.js";
 import { classifyStatus, getSetCookieHeaders, isRecord, looksLikeAuthFailure, TdfError } from "./utils.js";
+
+type StorefrontPerformance = Record<string, unknown>;
 
 export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFetchResult> {
   let activeCookie = await refreshTdfMemberSession(cookie, run);
@@ -19,10 +24,13 @@ export async function fetchTdfOffers(cookie: string, run: RunLog): Promise<TdfFe
     const started = Date.now();
     try {
       const productIds = await fetchPerformanceProductIds(activeCookie, run, attempt);
-      const offers = await fetchProductDetails(activeCookie, productIds, run, attempt);
+      const selectablePerformances = await fetchSelectablePerformances(activeCookie, productIds, run, attempt);
+      const offers = await fetchProductDetails(activeCookie, [...selectablePerformances.keys()], selectablePerformances, run, attempt);
       const details = {
         attempt,
         products: productIds.length,
+        selectableProducts: selectablePerformances.size,
+        selectablePerformances: countSelectablePerformances(selectablePerformances),
         durationMs: Date.now() - started
       };
       addStep(run, "fetch-tdf-performances", "success", {
@@ -299,9 +307,125 @@ async function fetchPerformanceProductIds(cookie: string, run: RunLog, attempt: 
   return productIds;
 }
 
+async function fetchSelectablePerformances(
+  cookie: string,
+  productIds: string[],
+  run: RunLog,
+  attempt: number
+): Promise<Map<string, StorefrontPerformance[]>> {
+  if (productIds.length === 0) {
+    return new Map();
+  }
+
+  const csrfToken = await fetchCsrfToken(cookie, run, attempt);
+  const selectablePerformances = new Map<string, StorefrontPerformance[]>();
+  const chunkSize = 10;
+  for (let index = 0; index < productIds.length; index += chunkSize) {
+    const chunk = productIds.slice(index, index + chunkSize);
+    const started = Date.now();
+    const results = await Promise.all(chunk.map((productId) => fetchProductPerformances(cookie, csrfToken, productId)));
+    for (const result of results) {
+      if (result.performances.length > 0) {
+        selectablePerformances.set(result.productId, result.performances);
+      }
+    }
+    addStep(run, "fetch-tdf-product-performances", "success", {
+      attempt,
+      chunk: index / chunkSize,
+      requestedProducts: chunk.length,
+      selectableProducts: results.filter((result) => result.performances.length > 0).length,
+      selectablePerformances: results.reduce((total, result) => total + result.performances.length, 0),
+      productsSoFar: selectablePerformances.size,
+      performancesSoFar: countSelectablePerformances(selectablePerformances),
+      durationMs: Date.now() - started
+    });
+  }
+
+  return selectablePerformances;
+}
+
+async function fetchCsrfToken(cookie: string, run: RunLog, attempt: number): Promise<string> {
+  const started = Date.now();
+  const response = await fetch(tdfCsrfTokenModuleUrl, {
+    headers: {
+      ...jsonHeaders(cookie, tdfOffersUrl),
+      Accept: "application/javascript, text/javascript, */*"
+    }
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  const details = {
+    attempt,
+    status: response.status,
+    contentType,
+    bodyBytes: body.length,
+    durationMs: Date.now() - started
+  };
+
+  if (!response.ok) {
+    addStep(run, "fetch-tdf-csrf-token", "failure", details);
+    throw new TdfError(`TDF CSRF token module returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+  }
+
+  const token = csrfTokenFromModule(body);
+  if (!token) {
+    addStep(run, "fetch-tdf-csrf-token", "failure", {
+      ...details,
+      bodyPreview: body.slice(0, 200)
+    });
+    throw new TdfError("TDF CSRF token module did not contain a token.", "unexpected");
+  }
+
+  addStep(run, "fetch-tdf-csrf-token", "success", details);
+  return token;
+}
+
+async function fetchProductPerformances(
+  cookie: string,
+  csrfToken: string,
+  productId: string
+): Promise<{ productId: string; performances: StorefrontPerformance[] }> {
+  const response = await fetch(tdfApexExecuteUrl, {
+    method: "POST",
+    headers: {
+      ...jsonHeaders(cookie, tdfOffersUrl),
+      "Content-Type": "application/json; charset=utf-8",
+      "csrf-token": csrfToken
+    },
+    body: JSON.stringify({
+      namespace: "",
+      classname: tdfTicketBookingClassName,
+      method: "getPerformances",
+      isContinuation: false,
+      params: { productId },
+      cacheable: false
+    })
+  });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+
+  if (!response.ok) {
+    throw new TdfError(`TDF product performances returned ${response.status}: ${body.slice(0, 200)}`, classifyStatus(response.status));
+  }
+  if (!contentType.includes("application/json")) {
+    throw new TdfError(
+      `TDF product performances returned non-JSON content (${contentType}): ${body.slice(0, 200)}`,
+      looksLikeAuthFailure(body) ? "auth" : "unexpected"
+    );
+  }
+
+  const parsed = JSON.parse(body) as unknown;
+  if (!isRecord(parsed) || !Array.isArray(parsed["returnValue"])) {
+    throw new TdfError("TDF product performances had an invalid response shape.", "unexpected");
+  }
+
+  return { productId, performances: parsed["returnValue"].filter(isRecord) };
+}
+
 async function fetchProductDetails(
   cookie: string,
   productIds: string[],
+  selectablePerformances: Map<string, StorefrontPerformance[]>,
   run: RunLog,
   attempt: number
 ): Promise<TdfOffer[]> {
@@ -347,7 +471,7 @@ async function fetchProductDetails(
     let parsedOffers: TdfOffer[];
     try {
       const parsed = JSON.parse(body) as unknown;
-      parsedOffers = parseOffers(parsed);
+      parsedOffers = parseOffers(expandStorefrontProductsWithPerformances(parsed, selectablePerformances));
     } catch (error) {
       addStep(run, "fetch-tdf-product-details", "failure", {
         ...details,
@@ -364,6 +488,60 @@ async function fetchProductDetails(
   }
 
   return mergeStorefrontOffers(offers);
+}
+
+function expandStorefrontProductsWithPerformances(
+  input: unknown,
+  selectablePerformances: Map<string, StorefrontPerformance[]>
+): unknown {
+  if (!isRecord(input) || !Array.isArray(input["products"])) {
+    return input;
+  }
+
+  return {
+    ...input,
+    products: input["products"].filter(isRecord).flatMap((product) => {
+      const productId = stringValue(product["id"]);
+      const performances = productId ? selectablePerformances.get(productId) : undefined;
+      if (!performances || performances.length === 0) {
+        return [product];
+      }
+      return performances.map((performance, index) =>
+        storefrontProductWithPerformance(product, performance, index)
+      );
+    })
+  };
+}
+
+function storefrontProductWithPerformance(
+  product: Record<string, unknown>,
+  performance: StorefrontPerformance,
+  index: number
+): Record<string, unknown> {
+  const fields = isRecord(product["fields"]) ? product["fields"] : {};
+  const productId = stringValue(product["id"]);
+  const performanceId = fieldString(performance, ["Id", "id", "PerformanceId__c", "Performance_Id__c"]);
+  const performanceDate = fieldString(performance, [
+    "Performance_Date__c",
+    "PerformanceDate__c",
+    "Start_Date__c",
+    "StartDate__c",
+    "Event_Date__c"
+  ]);
+  const productionSeasonId = fieldString(performance, ["Production__c", "ProductionSeasonId__c", "Production_Season_Id__c"]);
+  const title = fieldString(performance, ["Name", "name"]);
+
+  return {
+    ...product,
+    id: performanceId ?? (productId ? `${productId}:${index}` : product["id"]),
+    fields: {
+      ...fields,
+      ...(title ? { Name: title } : {}),
+      ...(productionSeasonId ? { ProductionSeasonId__c: productionSeasonId } : {}),
+      ...(performanceId ? { PerformanceId__c: performanceId } : {}),
+      ...(performanceDate ? { Performance_Date__c: performanceDate } : {})
+    }
+  };
 }
 
 function productSearchUrl(page: number): string {
@@ -392,7 +570,7 @@ function productDetailsUrl(productIds: string[]): string {
   return `${tdfApiBaseUrl}/products?${params.toString()}`;
 }
 
-function jsonHeaders(cookie: string, referer: string): HeadersInit {
+function jsonHeaders(cookie: string, referer: string): Record<string, string> {
   return {
     Accept: "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
@@ -401,6 +579,19 @@ function jsonHeaders(cookie: string, referer: string): HeadersInit {
     "User-Agent":
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.6 Safari/605.1.15"
   };
+}
+
+function csrfTokenFromModule(body: string): string | undefined {
+  const match = body.match(/@app\/csrfToken["'][\s\S]*?return\s+"([^"]+)"/);
+  const token = match?.[1];
+  if (!token) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(`"${token}"`) as string;
+  } catch {
+    return token.replace(/\\u003d/g, "=");
+  }
 }
 
 function productsFromStorefrontPayload(input: unknown): Array<Record<string, unknown>> | undefined {
@@ -588,6 +779,14 @@ export function flattenOffers(offers: TdfOffer[]): AlertItem[] {
 
 export function countPerformances(offers: TdfOffer[]): number {
   return offers.reduce((total, offer) => total + offer.performances.length, 0);
+}
+
+function countSelectablePerformances(selectablePerformances: Map<string, StorefrontPerformance[]>): number {
+  let total = 0;
+  for (const performances of selectablePerformances.values()) {
+    total += performances.length;
+  }
+  return total;
 }
 
 export function mergeSetCookies(cookie: string, setCookies: string[]): string {

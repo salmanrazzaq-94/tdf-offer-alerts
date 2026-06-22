@@ -33,7 +33,9 @@ const returnedOffers = [
   }
 ];
 
-function successfulTdfResponse(url: string, offers = sampleOffers): Response | undefined {
+const csrfTokenModule = "LWR.define('@app/csrfToken', [], function() { return \"csrf-token\"; });";
+
+function successfulTdfResponse(url: string, offers = sampleOffers, init?: RequestInit): Response | undefined {
   if (url.includes("/session-context")) {
     return response(JSON.stringify({ guestUser: false }), {
       status: 200,
@@ -60,6 +62,20 @@ function successfulTdfResponse(url: string, offers = sampleOffers): Response | u
       url
     });
   }
+  if (url.includes("/module/@app/csrfToken")) {
+    return response(csrfTokenModule, {
+      status: 200,
+      headers: { "content-type": "application/javascript" },
+      url
+    });
+  }
+  if (url.includes("/api/apex/execute")) {
+    return response(JSON.stringify({ returnValue: selectablePerformancesForApexRequest(offers, init) }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
   if (url.includes("/products?")) {
     return response(storefrontProductsFromSample(offers, offers.flatMap((offer) =>
       offer.performances.map((performance) => `${offer.productionSeasonId}:${performance.performanceId}`)
@@ -70,6 +86,30 @@ function successfulTdfResponse(url: string, offers = sampleOffers): Response | u
     });
   }
   return undefined;
+}
+
+function selectablePerformancesForApexRequest(
+  offers: typeof sampleOffers,
+  init: RequestInit | undefined
+): Array<Record<string, unknown>> {
+  const body = JSON.parse(requestBodyText(init)) as { params?: { productId?: string } };
+  const productId = body.params?.productId;
+  return offers.flatMap((offer) =>
+    offer.performances
+      .filter((performance) =>
+        productId ? productId === `${offer.productionSeasonId}:${performance.performanceId}` : true
+      )
+      .map((performance) => ({
+        Id: String(performance.performanceId),
+        Name: offer.title,
+        Production__c: String(offer.productionSeasonId),
+        Performance_Date__c: performance.performanceDate
+      }))
+  );
+}
+
+function requestBodyText(init: RequestInit | undefined): string {
+  return typeof init?.body === "string" ? init.body : "{}";
 }
 
 class MemoryKV {
@@ -162,10 +202,10 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -224,6 +264,8 @@ test("delta run touches main page, merges refreshed cookies, and skips old offer
         "tdf-session-context:success",
         "touch-tdf-main-page:success",
         "fetch-tdf-product-search:success",
+        "fetch-tdf-csrf-token:success",
+        "fetch-tdf-product-performances:success",
         "fetch-tdf-product-details:success",
         "fetch-tdf-performances:success",
         "persist-refreshed-cookie:success",
@@ -246,10 +288,10 @@ test("auth failure dispatches one automatic Browserbase refresh without Telegram
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url, returnedOffers);
+    const tdfResponse = successfulTdfResponse(url, returnedOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -305,7 +347,7 @@ test("auth failure without GitHub refresh config sends a manual recovery alert",
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -354,7 +396,7 @@ test("Browserbase refresh failure callback sends the Telegram attention message"
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -403,7 +445,7 @@ test("Browserbase refresh failure callback accepts form payloads", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -442,10 +484,10 @@ test("Browserbase refresh failure callback can suppress Telegram for E2E", async
   const kv = new MemoryKV();
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -489,10 +531,10 @@ test("duplicate Browserbase refresh failure callbacks are throttled", async () =
   const kv = new MemoryKV();
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -538,10 +580,10 @@ test("delta keeps seen history so temporarily unavailable performances do not al
   let offers = sampleOffers;
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -611,10 +653,10 @@ test("recent auth failure does not dispatch Browserbase refresh again", async ()
   );
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -653,10 +695,10 @@ test("telegram offers command starts Browserbase recovery without Telegram noise
   const calls: string[] = [];
   const tasks: Array<Promise<unknown>> = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -711,10 +753,10 @@ test("telegram status command starts Browserbase recovery without Telegram noise
   const calls: string[] = [];
   const tasks: Array<Promise<unknown>> = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -771,7 +813,7 @@ test("dispatch failure sends a clear recovery attention message", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -814,10 +856,10 @@ test("verify-cookie validates the saved cookie without sending Telegram", async 
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -866,9 +908,9 @@ test("verify-cookie succeeds when unrelated KV state is corrupted", async () => 
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put("UNRELATED_STATE", "{not-json");
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -915,9 +957,9 @@ test("verify-cookie can run read-only for production smoke without KV writes", a
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   kv.writes.length = 0;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -970,10 +1012,10 @@ test("delta recovers corrupted seen state without sending a full-current spam al
   await kv.put("SEEN_OFFERS", "{not-json");
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1030,10 +1072,10 @@ test("delta does not fail or send a misleading auth alert when details document 
   await kv.put("SEEN_OFFERS", JSON.stringify([]));
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1094,10 +1136,10 @@ test("delta logs a failed run when the Telegram summary send fails", async () =>
   await kv.put("SEEN_OFFERS", JSON.stringify([]));
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1196,10 +1238,10 @@ test("cookie form validates and saves a working cookie end to end", async () => 
   const kv = new MemoryKV();
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1260,7 +1302,7 @@ test("daily digest sends summary and details document for all current offers", a
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: init?.body });
-    const tdfResponse = successfulTdfResponse(url, returnedOffers);
+    const tdfResponse = successfulTdfResponse(url, returnedOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1323,7 +1365,7 @@ test("transient TDF performance failures retry before succeeding", async () => {
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
   let performanceAttempts = 0;
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     if (url.includes("/session-context")) {
       return response(JSON.stringify({ guestUser: false }), {
@@ -1352,6 +1394,20 @@ test("transient TDF performance failures retry before succeeding", async () => {
         return response("upstream busy", { status: 500, headers: { "content-type": "text/plain" }, url });
       }
       return response(storefrontSearch(), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+        url
+      });
+    }
+    if (url.includes("/module/@app/csrfToken")) {
+      return response(csrfTokenModule, {
+        status: 200,
+        headers: { "content-type": "application/javascript" },
+        url
+      });
+    }
+    if (url.includes("/api/apex/execute")) {
+      return response(JSON.stringify({ returnValue: selectablePerformancesForApexRequest(sampleOffers, init) }), {
         status: 200,
         headers: { "content-type": "application/json" },
         url
@@ -1451,7 +1507,7 @@ test("telegram utility commands send cookie link and help only", async () => {
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push({ url, body: typeof init?.body === "string" ? init.body : undefined });
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1542,10 +1598,10 @@ test("cron delta recovers a corrupted lock without writing success logs to KV", 
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1651,9 +1707,9 @@ test("cron delta skips lock release deletes and relies on KV TTL", async () => {
   await kv.put("TDF_COOKIE", "TNEW=old; .TDFCustomOfferings.Session=session");
   await kv.put("SEEN_OFFERS", JSON.stringify(["1:10"]));
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }
@@ -1713,10 +1769,10 @@ test("cron delta logs stale health without sending Telegram noise", async () => 
   );
   const calls: string[] = [];
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (input: string | URL | Request) => {
+  globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const url = String(input instanceof Request ? input.url : input);
     calls.push(url);
-    const tdfResponse = successfulTdfResponse(url);
+    const tdfResponse = successfulTdfResponse(url, sampleOffers, init);
     if (tdfResponse) {
       return tdfResponse;
     }

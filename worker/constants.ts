@@ -4,13 +4,17 @@ export const seenKey = "SEEN_OFFERS";
 export const authStateKey = "AUTH_STATE";
 export const healthStateKey = "HEALTH_STATE";
 export const deltaLockKey = "DELTA_LOCK";
-export const workerVersion = "2026-06-22.salesforce-commerce-v1";
+export const workerVersion = "2026-06-22.salesforce-commerce-v2";
 export const tdfMemberHomeUrl = "https://members.tdf.org/store/";
 export const tdfOffersUrl = "https://members.tdf.org/store/category/performances/0ZGPe00000003CPOAY";
 const tdfWebstoreId = "0ZEfK000000qcIvWAI";
 export const tdfPerformancesCategoryId = "0ZGPe00000003CPOAY";
 export const tdfApiBaseUrl =
   `https://members.tdf.org/store/webruntime/api/services/data/v67.0/commerce/webstores/${tdfWebstoreId}`;
+export const tdfApexExecuteUrl =
+  "https://members.tdf.org/store/webruntime/api/apex/execute?language=en-US&asGuest=false&htmlEncode=false";
+export const tdfCsrfTokenModuleUrl = "https://members.tdf.org/store/webruntime/module/@app/csrfToken";
+export const tdfTicketBookingClassName = "@udd/01pPe000001jpVz";
 export const tdfSessionContextUrl =
   `${tdfApiBaseUrl}/session-context?language=en-US&asGuest=false&htmlEncode=false`;
 export const tdfProductFields = [

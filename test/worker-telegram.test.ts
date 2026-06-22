@@ -13,6 +13,8 @@ import {
   withFetch
 } from "./worker-helpers.js";
 
+const csrfTokenModule = "LWR.define('@app/csrfToken', [], function() { return \"csrf-token\"; });";
+
 function successfulTdfResponse(url: string): Response | undefined {
   if (url.includes("/session-context")) {
     return response(JSON.stringify({ guestUser: false }), {
@@ -30,6 +32,20 @@ function successfulTdfResponse(url: string): Response | undefined {
   }
   if (url.includes("/search/products")) {
     return response(storefrontSearch(), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+      url
+    });
+  }
+  if (url.includes("/module/@app/csrfToken")) {
+    return response(csrfTokenModule, {
+      status: 200,
+      headers: { "content-type": "application/javascript" },
+      url
+    });
+  }
+  if (url.includes("/api/apex/execute")) {
+    return response(JSON.stringify({ returnValue: [{ id: "selectable-performance" }] }), {
       status: 200,
       headers: { "content-type": "application/json" },
       url

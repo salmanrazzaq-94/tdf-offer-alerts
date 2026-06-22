@@ -2,6 +2,10 @@ export const TDF_MEMBER_HOME_URL = "https://members.tdf.org/store/";
 export const TDF_OFFERS_URL = "https://members.tdf.org/store/category/performances/0ZGPe00000003CPOAY";
 export const TDF_API_BASE_URL =
   "https://members.tdf.org/store/webruntime/api/services/data/v67.0/commerce/webstores/0ZEfK000000qcIvWAI";
+export const TDF_APEX_EXECUTE_URL =
+  "https://members.tdf.org/store/webruntime/api/apex/execute?language=en-US&asGuest=false&htmlEncode=false";
+export const TDF_CSRF_TOKEN_MODULE_URL = "https://members.tdf.org/store/webruntime/module/@app/csrfToken";
+export const TDF_TICKET_BOOKING_CLASS_NAME = "@udd/01pPe000001jpVz";
 export const TDF_SESSION_CONTEXT_URL =
   `${TDF_API_BASE_URL}/session-context?language=en-US&asGuest=false&htmlEncode=false`;
 export const TDF_PERFORMANCES_CATEGORY_ID = "0ZGPe00000003CPOAY";
