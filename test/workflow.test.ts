@@ -94,6 +94,8 @@ test("login scripts use the current TDF member site", () => {
   }
   assert.match(loginBrowserbaseScript, /env\["TDF_USERNAME"\] \|\| env\["TDF_EMAIL"\]/);
   assert.match(loginBrowserbaseScript, /Missing required environment variable: TDF_USERNAME or TDF_EMAIL/);
+  assert.match(loginBrowserbaseScript, /getByLabel\("Username", \{ exact: true \}\)/);
+  assert.match(loginBrowserbaseScript, /getByLabel\("Password", \{ exact: true \}\)/);
   assert.match(refreshWorkflow, /TDF_USERNAME: \$\{\{ secrets\.TDF_USERNAME \}\}/);
   assert.match(refreshWorkflow, /TDF_EMAIL: \$\{\{ secrets\.TDF_EMAIL \}\}/);
   assert.match(preCheckWorkflow, /TDF_EMAIL: \$\{\{ secrets\.TDF_EMAIL \}\}/);
