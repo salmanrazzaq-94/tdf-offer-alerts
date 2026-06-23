@@ -104,12 +104,12 @@ async function loginToTdf(page: Page, env: LoginEnv, logger: OperationLogger): P
   logger.info("tdf-login-page-loaded", { url: page.url() });
   await failIfChallenge(page);
 
-  const email = page
+  const username = page.getByLabel("Username", { exact: true }).or(page
     .locator('input[type="email"], input[type="text"], input:not([type]), input[name*="email" i], input[id*="email" i], input[name*="user" i], input[id*="user" i]')
-    .first();
-  const password = page.locator('input[type="password"]').first();
+    .first());
+  const password = page.getByLabel("Password", { exact: true }).or(page.locator('input[type="password"]').first());
 
-  if (!(await email.isVisible({ timeout: 5_000 }).catch(() => false))) {
+  if (!(await username.isVisible({ timeout: 5_000 }).catch(() => false))) {
     const loginLink = page.getByRole("link", { name: /Log In/i }).first();
     await Promise.all([
       page.waitForLoadState("domcontentloaded", { timeout: 60_000 }).catch(() => undefined),
@@ -118,9 +118,9 @@ async function loginToTdf(page: Page, env: LoginEnv, logger: OperationLogger): P
     logger.info("tdf-login-link-clicked", { url: page.url() });
   }
 
-  await email.waitFor({ state: "visible", timeout: 30_000 });
+  await username.waitFor({ state: "visible", timeout: 30_000 });
   await password.waitFor({ state: "visible", timeout: 30_000 });
-  await email.fill(env.tdfUsername);
+  await username.fill(env.tdfUsername);
   await password.fill(env.tdfPassword);
   logger.info("tdf-login-form-filled");
 
