@@ -73,7 +73,7 @@ test("worker deploy workflow only deploys production from main", () => {
 });
 
 test("production smoke stays quiet and limited", () => {
-  assert.equal(packageJson.scripts["smoke:worker"], "node --env-file=.env scripts/smoke-worker.mjs");
+  assert.equal(packageJson.scripts["smoke:worker"], "node --env-file-if-exists=.env scripts/smoke-worker.mjs");
   assert.match(workerSmokeWorkflow, /npm run smoke:worker/);
   assert.match(smokeWorkerScript, /\/health/);
   assert.match(smokeWorkerScript, /\/debug/);
